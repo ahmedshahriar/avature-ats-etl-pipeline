@@ -156,3 +156,79 @@ try:
 except ImportError:
     boto3 = None
     ClientError = None
+
+
+class DynamoDBDedupePipeline:
+    """
+    Drops items if their job_hash has already been seen in previous AWS runs.
+
+    Table schema:
+      - Partition key: job_hash (String)
+      - Optional TTL attribute: expires_at (Number, epoch seconds)
+    """
+
+    def __init__(self):
+        self.deploy_env = os.getenv("DEPLOY_ENV", "local").lower()
+        self.table_name = os.getenv("DYNAMODB_TABLE", "avature-seen-jobs")
+        self.ttl_days = int(os.getenv("DYNAMODB_TTL_DAYS", "180"))
+        self.fail_open = os.getenv("DDB_DEDUPE_FAIL_OPEN", "0") == "1"
+
+        self.table = None
+        self._local_seen = set()  # reduce extra DDB calls within the same run
+
+    def open_spider(self, spider):
+        if self.deploy_env != "aws":
+            return
+
+        if boto3 is None or ClientError is None:
+            raise RuntimeError(
+                "boto3/botocore not installed but DEPLOY_ENV=aws. "
+                "Install boto3 (and botocore) in the container."
+            )
+
+        dynamodb = boto3.resource("dynamodb")
+        self.table = dynamodb.Table(self.table_name)
+        spider.logger.info("DynamoDB dedupe enabled (table=%s, ttl_days=%s)", self.table_name, self.ttl_days)
+
+    def process_item(self, item, spider):
+        # Not in AWS mode or table not initialized => no-op
+        if not self.table:
+            return item
+
+        job_hash = item.get("job_hash") or item.get("job_id")
+        if not job_hash:
+            return item
+
+        # In-run fast dedupe to avoid extra DynamoDB writes
+        if job_hash in self._local_seen:
+            spider.crawler.stats.inc_value("pipeline/dynamodb_duplicates_dropped")
+            raise DropItem(f"Duplicate within run (job_hash={job_hash})")
+        self._local_seen.add(job_hash)
+
+        expires_at = int(time.time()) + self.ttl_days * 86400
+
+        try:
+            self.table.put_item(
+                Item={
+                    "job_hash": job_hash,
+                    "first_seen_ts": int(time.time()),
+                    "expires_at": expires_at,
+                },
+                ConditionExpression="attribute_not_exists(job_hash)",
+            )
+            return item
+
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code == "ConditionalCheckFailedException":
+                spider.crawler.stats.inc_value("pipeline/dynamodb_duplicates_dropped")
+                raise DropItem(f"Duplicate across runs (job_hash={job_hash})")
+
+            # Real error: permissions/table missing/throttle/etc.
+            spider.logger.error("DynamoDB put_item error (%s): %s", code, e)
+
+            # Best practice: fail-fast to keep idempotency guarantees,
+            # unless explicitly allow fail-open.
+            if self.fail_open:
+                return item
+            raise
