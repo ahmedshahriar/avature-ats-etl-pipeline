@@ -1,0 +1,24 @@
+[project]
+name = "avature-ats-etl-pipeline"
+version = "0.1.0"
+description = "Avature ATS ETL Pipeline for data extraction, transformation, and loading."
+authors = [
+    { name = "Ahmed Shahriar Sakib", email = "ahmed.shahriar.sakib@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "scrapy>=2.14.1",
+    "pandas>=2.2.0",
+]
+
+[project.optional-dependencies]
+analysis = [
+    "jupyter>=1.1.1",
+    "matplotlib>=3.10.8",
+    "pandas-stubs>=3.0.0.260204",
+    "seaborn>=0.13.2",
+]
+aws = [
+    "boto3>=1.42.61",
+    "boto3-stubs>=1.42.61",
+]
