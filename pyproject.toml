@@ -46,6 +46,9 @@ line-length = 120
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ty]
+[tool.ty.environment]
+extra-paths = ["infra"]
+
 [tool.ty.src]
 include = ["infra", "core"]
 
