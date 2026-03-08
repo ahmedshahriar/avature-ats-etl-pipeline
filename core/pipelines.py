@@ -1,13 +1,13 @@
 import json
-import os
 import time
 from collections import defaultdict
+from types import ModuleType
+from typing import Any
 from urllib.parse import urlparse
 
 # useful for handling different item types with a single interface
 from scrapy import signals
 from scrapy.exceptions import DropItem
-
 
 # class CorePipeline:
 #     def process_item(self, item, spider):
@@ -44,14 +44,14 @@ class JobPipeline:
     def spider_closed(self, spider, reason):
         # At the end of the crawl compute unique counts and log them
         metrics = {
-            'unique_jobs_scraped': self.total_items,
-            'duplicate_items_dropped': self.duplicates_dropped,
-            'unique_hosts': len(self.hosts),
-            'unique_portals': len(self.portals),
+            "unique_jobs_scraped": self.total_items,
+            "duplicate_items_dropped": self.duplicates_dropped,
+            "unique_hosts": len(self.hosts),
+            "unique_portals": len(self.portals),
         }
         # Per‑field completeness
         for field, count in self.field_counts.items():
-            metrics[f'jobs_with_{field}'] = count
+            metrics[f"jobs_with_{field}"] = count
         spider.logger.info("JobPipeline summary: %s", metrics)
 
         # Save pipeline summary into Scrapy stats so extensions/exporters can include it
@@ -63,7 +63,7 @@ class JobPipeline:
             for k, v in metrics.items():
                 self.stats.set_value(f"pipeline/{k}", v)
 
-        deploy_env = spider.settings.get("DEPLOY_ENV", os.getenv("DEPLOY_ENV", "local")).lower()
+        deploy_env = spider.settings.get("DEPLOY_ENV").lower()
 
         if deploy_env != "aws":
             return
@@ -79,6 +79,7 @@ class JobPipeline:
 
         try:
             import boto3
+
             s3 = boto3.client("s3")
 
             final_stats = (self.stats.get_stats() if self.stats else {}) or {}
@@ -129,7 +130,7 @@ class JobPipeline:
 
         # Count fields present
         self.total_items += 1
-        for key in ['description_text', 'locations', 'posted_date', 'apply_url']:
+        for key in ["description_text", "locations", "posted_date", "apply_url"]:
             value = item.get(key)
             if value:
                 # For list fields check if non‑empty
@@ -138,14 +139,15 @@ class JobPipeline:
                 self.field_counts[key] += 1
 
         # Track host and portal for high level metrics
-        url = item.get('source_url')
+        url = item.get("source_url")
         if url:
             from urllib.parse import urlparse
+
             parsed = urlparse(url)
             if parsed.hostname:
                 self.hosts.add(parsed.hostname)
-                parts = [p for p in parsed.path.split('/') if p]
-                base = '/'.join(parts[:2]) if parts else ''
+                parts = [p for p in parsed.path.split("/") if p]
+                base = "/".join(parts[:2]) if parts else ""
                 self.portals.add(f"{parsed.hostname}/{base}")
         return item
 
@@ -154,8 +156,8 @@ try:
     import boto3
     from botocore.exceptions import ClientError
 except ImportError:
-    boto3 = None
-    ClientError = None
+    boto3: ModuleType | None = None
+    ClientError: type | None = None
 
 
 class DynamoDBDedupePipeline:
@@ -167,14 +169,28 @@ class DynamoDBDedupePipeline:
       - Optional TTL attribute: expires_at (Number, epoch seconds)
     """
 
-    def __init__(self):
-        self.deploy_env = os.getenv("DEPLOY_ENV", "local").lower()
-        self.table_name = os.getenv("DYNAMODB_TABLE", "avature-seen-jobs")
-        self.ttl_days = int(os.getenv("DYNAMODB_TTL_DAYS", "180"))
-        self.fail_open = os.getenv("DDB_DEDUPE_FAIL_OPEN", "0") == "1"
+    deploy_env: str
+    table_name: str | None
+    ttl_days: int
+    fail_open: bool
+    table: Any
+    _local_seen: set
 
-        self.table = None
-        self._local_seen = set()  # reduce extra DDB calls within the same run
+    @classmethod
+    def from_crawler(cls, crawler):
+        obj = cls.__new__(cls)  # bypass __init__
+        obj.deploy_env = crawler.settings.get("DEPLOY_ENV", "local").lower()
+        obj.table_name = crawler.settings.get("DYNAMODB_TABLE_NAME")
+        obj.ttl_days = crawler.settings.get("DYNAMODB_TTL_DAYS")
+
+        # DynamoDB error handling: fail-fast by default to maintain idempotency.
+        # fail_open=False (default): exception is raised, drops that single item and continues processing other items
+        # fail_open=True: item is allowed through despite the DynamoDB error, processing continues with the next item
+        obj.fail_open = crawler.settings.getbool("DDB_DEDUPE_FAIL_OPEN", False)
+
+        obj.table = None
+        obj._local_seen = set()  # reduce extra DDB calls within the same run
+        return obj
 
     def open_spider(self, spider):
         if self.deploy_env != "aws":
@@ -182,8 +198,7 @@ class DynamoDBDedupePipeline:
 
         if boto3 is None or ClientError is None:
             raise RuntimeError(
-                "boto3/botocore not installed but DEPLOY_ENV=aws. "
-                "Install boto3 (and botocore) in the container."
+                "boto3/botocore not installed but DEPLOY_ENV=aws. Install boto3 (and botocore) in the container."
             )
 
         dynamodb = boto3.resource("dynamodb")
@@ -218,11 +233,15 @@ class DynamoDBDedupePipeline:
             )
             return item
 
-        except ClientError as e:
-            code = e.response.get("Error", {}).get("Code", "")
+        except Exception as e:
+            # ClientError is only available when boto3 is installed;
+            # at this point open_spider already verified it's not None.
+            if ClientError is not None and not isinstance(e, ClientError):
+                raise
+            code = e.response.get("Error", {}).get("Code", "")  # type: ignore[union-attr]
             if code == "ConditionalCheckFailedException":
                 spider.crawler.stats.inc_value("pipeline/dynamodb_duplicates_dropped")
-                raise DropItem(f"Duplicate across runs (job_hash={job_hash})")
+                raise DropItem(f"Duplicate across runs (job_hash={job_hash})") from None
 
             # Real error: permissions/table missing/throttle/etc.
             spider.logger.error("DynamoDB put_item error (%s): %s", code, e)

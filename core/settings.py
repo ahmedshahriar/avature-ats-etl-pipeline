@@ -1,6 +1,19 @@
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+
+    # This will only execute locally where python-dotenv is installed via 'uv'
+    # By default, load_dotenv() looks for '.env' in the directory you run the script from
+    load_dotenv()
+    print("Loaded local .env file.")
+except ImportError:
+    # If we are in AWS ECS, python-dotenv won't be in requirements.txt.
+    # The import fails, we catch it, and silently move on because ECS
+    # natively injects the variables into the OS environment.
+    print("Running in production mode. Relying on system environment variables.")
 
 BOT_NAME = "core"
 
@@ -14,7 +27,7 @@ ADDONS = {}
 # -----------------------------------------------------------------------------
 DEPLOY_ENV = os.getenv("DEPLOY_ENV", "local").lower()
 
-now_utc = datetime.now(timezone.utc)
+now_utc = datetime.now(UTC)
 DATE_STR = now_utc.strftime("%Y-%m-%d")
 TS_STR = now_utc.strftime("%Y%m%d_%H%M%S")
 
@@ -149,19 +162,26 @@ METRICS_FILE = os.getenv("METRICS_FILE", "metrics.json")
 
 if DEPLOY_ENV == "aws":
     # Required in ECS task env
-    S3_OUTPUT_BUCKET = os.getenv("S3_OUTPUT_BUCKET")
+    S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
 
-    if not S3_OUTPUT_BUCKET:
-        raise RuntimeError("S3_OUTPUT_BUCKET must be set when DEPLOY_ENV=aws")
+    if not S3_BUCKET_NAME:
+        raise RuntimeError("S3_BUCKET_NAME must be set when DEPLOY_ENV=aws")
 
     # Example: avature/dt=2026-03-05/jobs.jsonl
     S3_OUTPUT_PREFIX = os.getenv("S3_OUTPUT_PREFIX", f"avature/dt={RUN_ID}")
 
-    JOBS_FEED_URI = f"s3://{S3_OUTPUT_BUCKET}/{S3_OUTPUT_PREFIX}/{SCRAPY_FEED_NAME}"
-    METRICS_S3_URI = f"s3://{S3_OUTPUT_BUCKET}/{S3_OUTPUT_PREFIX}/{METRICS_FILE}"
+    JOBS_FEED_URI = f"s3://{S3_BUCKET_NAME}/{S3_OUTPUT_PREFIX}/{SCRAPY_FEED_NAME}"
+    METRICS_S3_URI = f"s3://{S3_BUCKET_NAME}/{S3_OUTPUT_PREFIX}/{METRICS_FILE}"
 
     JOBDIR = None
     SCHEDULER_PERSIST = False
+
+    DYNAMODB_TABLE_NAME = os.getenv("DYNAMODB_TABLE_NAME")
+    if not DYNAMODB_TABLE_NAME:
+        raise RuntimeError("DYNAMODB_TABLE_NAME must be set when DEPLOY_ENV=aws")
+
+    DYNAMODB_TTL_DAYS = int(os.getenv("DYNAMODB_TTL_DAYS", "60"))
+    DDB_DEDUPE_FAIL_OPEN = os.getenv("DDB_DEDUPE_FAIL_OPEN", "0") == "1"
 
     # Run DynamoDB deduplication FIRST, then standard metrics pipeline
     ITEM_PIPELINES = {
@@ -170,9 +190,7 @@ if DEPLOY_ENV == "aws":
     }
 
     # Disable periodic extension in AWS for now
-    EXTENSIONS = {
-        "core.extensions.StatsDumpExtension": None
-    }
+    EXTENSIONS = {"core.extensions.StatsDumpExtension": None}
 else:
     # Local run directory output
     JOBS_FEED_URI = str(LOCAL_RUN_DIR / SCRAPY_FEED_NAME)
@@ -191,9 +209,7 @@ else:
         "core.pipelines.JobPipeline": 300,
     }
 
-    EXTENSIONS = {
-        "core.extensions.StatsDumpExtension": 500
-    }
+    EXTENSIONS = {"core.extensions.StatsDumpExtension": 500}
     METRICS_DUMP_PATH = str(LOCAL_RUN_DIR / METRICS_FILE)
     METRICS_DUMP_INTERVAL = int(os.getenv("METRICS_DUMP_INTERVAL", "30"))
 
