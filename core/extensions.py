@@ -1,7 +1,7 @@
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from scrapy import signals
 from twisted.internet.task import LoopingCall
@@ -42,7 +42,7 @@ class StatsDumpExtension:
         self._dump(reason=f"spider_closed:{reason}")
 
     def _dump(self, reason: str):
-        stats: Dict[str, Any] = dict(self.stats.get_stats() or {})
+        stats: dict[str, Any] = dict(self.stats.get_stats() or {})
         stats["_dump_ts"] = time.time()
         stats["_dump_reason"] = reason
 
@@ -68,5 +68,8 @@ class StatsDumpExtension:
             stats["_pipeline"] = pipeline_summary
 
         tmp = self.dump_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(stats, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+        tmp.write_text(
+            json.dumps(stats, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
         tmp.replace(self.dump_path)
