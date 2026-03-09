@@ -43,6 +43,8 @@ class AvatureEtlScheduleStack(Stack):
             retention_period=Duration.days(14) if is_prod else Duration.days(3),
         )
 
+        self.dlq = dlq
+
         # Explicit execution role for Scheduler
         scheduler_role = iam.Role(
             self,

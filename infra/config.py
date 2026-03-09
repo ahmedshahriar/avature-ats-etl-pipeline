@@ -24,6 +24,9 @@ class AppConfig:
     ecs_task_cpu: int
     ecs_task_memory: int
 
+    # Optional alert email for ECS task failures; if not set, no alerts will be configured.
+    alert_email: str | None
+
     scraper_runtime: ScraperRuntimeConfig
 
     tags: dict[str, str] = field(default_factory=dict)
@@ -40,6 +43,7 @@ class AppConfig:
             ddb_table_suffix=os.environ["DDB_TABLE_SUFFIX"],
             ecs_task_cpu=int(os.environ["ECS_TASK_CPU"]),
             ecs_task_memory=int(os.environ["ECS_TASK_MEMORY"]),
+            alert_email=os.getenv("ALERT_EMAIL", "").strip() or None,
             scraper_runtime=ScraperRuntimeConfig.from_env(),
             tags={
                 k: v

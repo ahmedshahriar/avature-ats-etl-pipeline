@@ -5,6 +5,7 @@ from config import AppConfig
 from stacks.base_stack import AvatureEtlBaseStack
 from stacks.ecr_stack import AvatureEtlEcrStack
 from stacks.ecs_stack import AvatureEtlEcsStack
+from stacks.notifications_stack import AvatureEtlNotificationsStack
 from stacks.schedule_stack import AvatureEtlScheduleStack
 
 app = App()
@@ -70,8 +71,22 @@ schedule_stack = AvatureEtlScheduleStack(
     ),
 )
 
+notifications_stack = AvatureEtlNotificationsStack(
+    app,
+    f"{cfg.project_name}-notifications",
+    prefix=cfg.project_name,
+    stage=cfg.env_name,
+    scheduler_dlq=schedule_stack.dlq,
+    alert_email=cfg.alert_email,
+    env=Environment(
+        account=os.getenv("CDK_DEFAULT_ACCOUNT"),
+        region=os.getenv("CDK_DEFAULT_REGION"),
+    ),
+)
+
 ecs_stack.add_dependency(base_stack)
 ecs_stack.add_dependency(ecr_stack)
 schedule_stack.add_dependency(ecs_stack)
+notifications_stack.add_dependency(schedule_stack)
 
 app.synth()
