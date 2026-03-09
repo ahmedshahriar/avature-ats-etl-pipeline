@@ -4,9 +4,9 @@ from aws_cdk import App, Environment, Tags
 from config import AppConfig
 from stacks.base_stack import AvatureEtlBaseStack
 from stacks.ecr_stack import AvatureEtlEcrStack
-from stacks.ecs_stack import AvatureEtlEcsStack
+from stacks.ecs_schedule_stack import AvatureEtlEcsScheduleStack
 from stacks.notifications_stack import AvatureEtlNotificationsStack
-from stacks.schedule_stack import AvatureEtlScheduleStack
+from stacks.runtime_alarm_stack import AvatureEtlRuntimeAlarmStack
 
 app = App()
 cfg = AppConfig.from_env()
@@ -35,7 +35,11 @@ ecr_stack = AvatureEtlEcrStack(
     ),
 )
 
-ecs_stack = AvatureEtlEcsStack(
+# ECS + Scheduler are merged into one stack to eliminate Fn::ImportValue cross-stack locks.
+# CDK auto-generates ExportsOutput/Fn::ImportValue for any cross-stack Python reference,
+# which blocks CloudFormation from updating resources like TaskDefinition while another
+# stack imports them. Merging eliminates that constraint entirely.
+ecs_stack = AvatureEtlEcsScheduleStack(
     app,
     f"{cfg.project_name}-ecs",
     prefix=cfg.project_name,
@@ -47,20 +51,6 @@ ecs_stack = AvatureEtlEcsStack(
     ecs_log_group=base_stack.ecs_log_group,
     repository=ecr_stack.repository,
     scraper_runtime_env=cfg.scraper_runtime.to_env(),
-    env=Environment(
-        account=os.getenv("CDK_DEFAULT_ACCOUNT"),
-        region=os.getenv("CDK_DEFAULT_REGION"),
-    ),
-)
-
-schedule_stack = AvatureEtlScheduleStack(
-    app,
-    f"{cfg.project_name}-schedule",
-    prefix=cfg.project_name,
-    stage=cfg.env_name,
-    cluster=ecs_stack.cluster,
-    task_definition=ecs_stack.task_definition,
-    task_security_group=ecs_stack.task_security_group,
     schedule_hour="9" if cfg.env_name == "prod" else "10",
     schedule_minute="0",
     schedule_timezone="UTC",
@@ -76,8 +66,21 @@ notifications_stack = AvatureEtlNotificationsStack(
     f"{cfg.project_name}-notifications",
     prefix=cfg.project_name,
     stage=cfg.env_name,
-    scheduler_dlq=schedule_stack.dlq,
+    scheduler_dlq=ecs_stack.dlq,
     alert_email=cfg.alert_email,
+    env=Environment(
+        account=os.getenv("CDK_DEFAULT_ACCOUNT"),
+        region=os.getenv("CDK_DEFAULT_REGION"),
+    ),
+)
+
+runtime_alarm_stack = AvatureEtlRuntimeAlarmStack(
+    app,
+    f"{cfg.project_name}-runtime-alarms",
+    prefix=cfg.project_name,
+    stage=cfg.env_name,
+    topic=notifications_stack.topic,  # ty: ignore[invalid-argument-type]
+    spider_name="avature",
     env=Environment(
         account=os.getenv("CDK_DEFAULT_ACCOUNT"),
         region=os.getenv("CDK_DEFAULT_REGION"),
@@ -86,7 +89,7 @@ notifications_stack = AvatureEtlNotificationsStack(
 
 ecs_stack.add_dependency(base_stack)
 ecs_stack.add_dependency(ecr_stack)
-schedule_stack.add_dependency(ecs_stack)
-notifications_stack.add_dependency(schedule_stack)
+notifications_stack.add_dependency(ecs_stack)
+runtime_alarm_stack.add_dependency(notifications_stack)
 
 app.synth()
