@@ -72,7 +72,7 @@ DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "30"))
 # AutoThrottle helps with heterogeneous portals / soft rate limits
 # Enable and configure the AutoThrottle extension (disabled by default)
 # See https://docs.scrapy.org/en/latest/topics/autothrottle.html
-AUTOTHROTTLE_ENABLED = os.getenv("AUTOTHROTTLE_ENABLED", "1") == "1"
+AUTOTHROTTLE_ENABLED = os.getenv("AUTOTHROTTLE_ENABLED", "1").lower() in ("1", "true", "yes")
 # The initial download delay
 AUTOTHROTTLE_START_DELAY = float(os.getenv("AUTOTHROTTLE_START_DELAY", "1.0"))
 # The maximum download delay to be set in case of high latencies
@@ -86,13 +86,12 @@ AUTOTHROTTLE_DEBUG = False
 # -----------------------------------------------------------------------------
 # Default headers / UA
 # -----------------------------------------------------------------------------
-# or use a pool of user agents and rotate them in a custom downloader middleware for better anti-scraping evasion
-USER_AGENT = os.getenv(
-    "USER_AGENT",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36",
+
+USER_AGENTS = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 )
+
 
 DEFAULT_REQUEST_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -163,7 +162,7 @@ if DEPLOY_ENV == "aws":
         raise RuntimeError("DYNAMODB_TABLE_NAME must be set when DEPLOY_ENV=aws")
 
     DYNAMODB_TTL_DAYS = int(os.getenv("DYNAMODB_TTL_DAYS", "60"))
-    DDB_DEDUPE_FAIL_OPEN = os.getenv("DDB_DEDUPE_FAIL_OPEN", "0") == "1"
+    DDB_DEDUPE_FAIL_OPEN = os.getenv("DDB_DEDUPE_FAIL_OPEN", "0").lower() in ("1", "true", "yes")
 
     # Run DynamoDB deduplication FIRST, then standard metrics pipeline
     ITEM_PIPELINES = {

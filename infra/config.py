@@ -3,11 +3,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
+from scraper_config import ScraperRuntimeConfig
 
 # Load the environment variables before doing anything else
 
-if Path("dev.env").exists():
-    load_dotenv("dev.env", override=False)
+env_file = Path(__file__).with_name("dev.env")
+if env_file.exists():
+    load_dotenv(env_file, override=False)
 
 
 @dataclass(frozen=True)
@@ -24,6 +26,8 @@ class AppConfig:
     ecs_task_cpu: int
     ecs_task_memory: int
 
+    scraper_runtime: ScraperRuntimeConfig
+
     tags: dict[str, str] = field(default_factory=dict)
 
     @classmethod
@@ -38,6 +42,7 @@ class AppConfig:
             ddb_table_suffix=os.environ["DDB_TABLE_SUFFIX"],
             ecs_task_cpu=int(os.environ["ECS_TASK_CPU"]),
             ecs_task_memory=int(os.environ["ECS_TASK_MEMORY"]),
+            scraper_runtime=ScraperRuntimeConfig.from_env(),
             tags={
                 k: v
                 for k, v in {
