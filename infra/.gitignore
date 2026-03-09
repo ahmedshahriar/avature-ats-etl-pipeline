@@ -12,3 +12,6 @@ cdk.out/
 *.tabl.json
 cdk-integ.out.*/
 .aws-sam/
+
+# env files
+dev.env

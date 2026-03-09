@@ -20,7 +20,7 @@ class AvatureEtlEcrStack(Stack):
             empty_on_delete=False if is_prod else True,
         )
 
-        # Keep recent images only; enough for rollback without clutter
+        # keep recent images only; enough for rollback without clutter
         self.repository.add_lifecycle_rule(max_image_count=20 if is_prod else 10)
 
         CfnOutput(self, "RepositoryName", value=self.repository.repository_name)

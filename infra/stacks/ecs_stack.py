@@ -106,7 +106,7 @@ class AvatureEtlEcsStack(Stack):
             ),
         )
 
-        task_definition.add_container(
+        container = task_definition.add_container(
             "ScraperContainer",
             container_name=f"{prefix}-scraper",
             image=ecs.ContainerImage.from_ecr_repository(
@@ -127,6 +127,9 @@ class AvatureEtlEcsStack(Stack):
             command=["scrapy", "crawl", "avature"],
             working_directory="/app",
         )
+
+        container.add_environment("STACK_STAGE", stage)
+        container.add_environment("LOG_LEVEL", "INFO" if is_prod else "DEBUG")
 
         # ---- Outputs ----
         CfnOutput(self, "ClusterName", value=cluster.cluster_name)

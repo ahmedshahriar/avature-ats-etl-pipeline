@@ -55,7 +55,8 @@ class AvatureEtlBaseStack(Stack):
         log_removal = RemovalPolicy.RETAIN if is_prod else RemovalPolicy.DESTROY
 
         # ---- S3 Bucket (globally unique name) ----
-        # Bucket names must be globally unique. This pattern is stable and safe.
+        # Bucket names must be globally unique.
+        # pattern syntax: https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
         bucket_name = f"{prefix}-{bucket_suffix}-{self.account}-{self.region}".lower()
 
         self.outputs_bucket = s3.Bucket(
@@ -70,8 +71,6 @@ class AvatureEtlBaseStack(Stack):
             removal_policy=bucket_removal,
         )
 
-        # OPTIONAL: lifecycle to control storage costs (keep simple)
-        # You can tune this later. In prod, 30–90 days is common for scrape outputs.
         self.outputs_bucket.add_lifecycle_rule(
             prefix="avature/",
             expiration=Duration.days(90 if is_prod else 14),

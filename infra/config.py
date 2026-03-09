@@ -5,8 +5,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 from scraper_config import ScraperRuntimeConfig
 
-# Load the environment variables before doing anything else
-
 env_file = Path(__file__).with_name("dev.env")
 if env_file.exists():
     load_dotenv(env_file, override=False)
