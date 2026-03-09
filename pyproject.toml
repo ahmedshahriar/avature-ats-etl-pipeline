@@ -54,3 +54,7 @@ include = ["infra", "core"]
 
 [tool.ty.rules]
 possibly-unresolved-reference = "warn"
+
+[tool.pytest.ini_options]
+testpaths = ["infra/tests"]
+pythonpath = ["infra"]
