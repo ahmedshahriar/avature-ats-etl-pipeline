@@ -13,6 +13,10 @@ except ImportError:
 
 BOT_NAME = "core"
 
+# should be unique to avoid collisions in shared AWS resources
+PROJECT_NAME = os.getenv("PROJECT_NAME")
+ENV_NAME = os.getenv("ENV_NAME", "dev")
+
 SPIDER_MODULES = ["core.spiders"]
 NEWSPIDER_MODULE = "core.spiders"
 
@@ -21,6 +25,7 @@ ADDONS = {}
 # -----------------------------------------------------------------------------
 # Dynamic Run Routing (Local vs AWS)
 # -----------------------------------------------------------------------------
+
 DEPLOY_ENV = os.getenv("DEPLOY_ENV", "local").lower()
 
 now_utc = datetime.now(UTC)

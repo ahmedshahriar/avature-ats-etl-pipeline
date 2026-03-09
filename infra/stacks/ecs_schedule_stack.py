@@ -143,7 +143,7 @@ class AvatureEtlEcsScheduleStack(Stack):
         container.add_environment("LOG_LEVEL", "INFO" if is_prod else "DEBUG")
 
         # NOTE:
-        # The scheduler now lives in the ECS stack, so TaskDefinition is no longer a
+        # The scheduler lives in the ECS stack, so TaskDefinition is no longer a
         # cross-stack reference. Cross-stack references still exist for more stable
         # resources like the DLQ -> notifications stack and SNS topic -> runtime alarms stack.
 
@@ -205,10 +205,7 @@ class AvatureEtlEcsScheduleStack(Stack):
             target=target,  # ty: ignore[invalid-argument-type]
         )
 
-        # ---- Outputs ----
-        # NOTE: No cross-stack CfnOutput for cluster/task_definition/task_sg —
-        # all consumers (notifications_stack, runtime_alarm_stack) receive Python
-        # references via props so no Fn::ImportValue is generated.
+        # Outputs for easy reference in deploy time and tests
         CfnOutput(self, "ClusterName", value=cluster.cluster_name)
         CfnOutput(self, "TaskDefinitionArn", value=task_definition.task_definition_arn)
         CfnOutput(self, "TaskSecurityGroupId", value=task_sg.security_group_id)

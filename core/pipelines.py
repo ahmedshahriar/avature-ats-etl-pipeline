@@ -9,10 +9,6 @@ from urllib.parse import urlparse
 from scrapy import signals
 from scrapy.exceptions import DropItem
 
-# class CorePipeline:
-#     def process_item(self, item, spider):
-#         return item
-
 
 class JobPipeline:
     """Track and report metrics for scraped JobItem objects."""
@@ -52,6 +48,7 @@ class JobPipeline:
         # Per‑field completeness
         for field, count in self.field_counts.items():
             metrics[f"jobs_with_{field}"] = count
+
         spider.logger.info("JobPipeline summary: %s", metrics)
 
         # Save pipeline summary into Scrapy stats so extensions/exporters can include it
@@ -63,7 +60,44 @@ class JobPipeline:
             for k, v in metrics.items():
                 self.stats.set_value(f"pipeline/{k}", v)
 
-        deploy_env = spider.settings.get("DEPLOY_ENV").lower()
+        deploy_env = (spider.settings.get("DEPLOY_ENV") or "local").lower()
+
+        # --- Emit CloudWatch EMF ---
+        if deploy_env == "aws":
+            # --- Emit CloudWatch EMF as a raw JSON log line ---
+            # Keep dimensions LOW cardinality. Do NOT include run_id / job_id / URLs.
+            # Keep dimensions LOW cardinality. Do NOT include run_id / job_id / URLs.
+            project = spider.settings.get("PROJECT_NAME", "avature-etl")
+            stage = spider.settings.get("ENV_NAME") or spider.settings.get("DEPLOY_ENV", "dev")
+            spider_name = spider.name
+
+            emf_payload = {
+                "_aws": {
+                    "Timestamp": int(time.time() * 1000),
+                    "CloudWatchMetrics": [
+                        {
+                            "Namespace": "AvatureETL",
+                            "Dimensions": [["Project", "Stage", "Spider"]],
+                            "Metrics": [
+                                {"Name": "RunSuccess", "Unit": "Count"},
+                                {"Name": "RunFailed", "Unit": "Count"},
+                                {"Name": "UniqueJobs", "Unit": "Count"},
+                                {"Name": "DuplicateItemsDropped", "Unit": "Count"},
+                            ],
+                        }
+                    ],
+                },
+                "Project": project,
+                "Stage": stage,
+                "Spider": spider_name,
+                "RunSuccess": 1 if reason == "finished" else 0,
+                "RunFailed": 0 if reason == "finished" else 1,
+                "UniqueJobs": self.total_items,
+                "DuplicateItemsDropped": self.duplicates_dropped,
+            }
+
+            # Important: EMF must be the raw log event JSON, not prefixed by logger formatting.
+            print(json.dumps(emf_payload, ensure_ascii=False))
 
         if deploy_env != "aws":
             return
