@@ -48,6 +48,8 @@ class AvatureEtlNotificationsStack(Stack):
             alarm_name=f"{prefix}-{stage}-scheduler-dlq-visible-messages",
             alarm_description="Scheduler DLQ has one or more failed invocations waiting for investigation.",
             metric=scheduler_dlq.metric_approximate_number_of_messages_visible(
+                # Use a longer period to avoid alerting on transient failures that resolve quickly
+                # (e.g., due to retries or eventual consistency).
                 period=Duration.minutes(5),
                 statistic="Maximum",
             ),
