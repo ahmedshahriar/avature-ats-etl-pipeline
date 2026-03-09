@@ -1,10 +1,13 @@
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from dotenv import load_dotenv
 
 # Load the environment variables before doing anything else
-load_dotenv("dev.env")
+
+if Path("dev.env").exists():
+    load_dotenv("dev.env", override=False)
 
 
 @dataclass(frozen=True)
@@ -16,6 +19,10 @@ class AppConfig:
     aws_region: str | None
     bucket_suffix: str
     ddb_table_suffix: str
+
+    # New Operational Controls
+    ecs_task_cpu: int
+    ecs_task_memory: int
 
     tags: dict[str, str] = field(default_factory=dict)
 
@@ -29,6 +36,8 @@ class AppConfig:
             aws_region=os.getenv("AWS_REGION"),
             bucket_suffix=os.environ["BUCKET_SUFFIX"],
             ddb_table_suffix=os.environ["DDB_TABLE_SUFFIX"],
+            ecs_task_cpu=int(os.environ["ECS_TASK_CPU"]),
+            ecs_task_memory=int(os.environ["ECS_TASK_MEMORY"]),
             tags={
                 k: v
                 for k, v in {

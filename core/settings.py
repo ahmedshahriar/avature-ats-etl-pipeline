@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -5,15 +6,10 @@ from pathlib import Path
 try:
     from dotenv import load_dotenv
 
-    # This will only execute locally where python-dotenv is installed via 'uv'
-    # By default, load_dotenv() looks for '.env' in the directory you run the script from
-    load_dotenv()
-    print("Loaded local .env file.")
+    load_dotenv(dotenv_path=".env", override=False)
+    logging.info("Loaded local .env file.")
 except ImportError:
-    # If we are in AWS ECS, python-dotenv won't be in requirements.txt.
-    # The import fails, we catch it, and silently move on because ECS
-    # natively injects the variables into the OS environment.
-    print("Running in production mode. Relying on system environment variables.")
+    logging.info("Running in production mode. Relying on system environment variables.")
 
 BOT_NAME = "core"
 
@@ -31,18 +27,13 @@ now_utc = datetime.now(UTC)
 DATE_STR = now_utc.strftime("%Y-%m-%d")
 TS_STR = now_utc.strftime("%Y%m%d_%H%M%S")
 
-# AWS: run_id is DATE, Local: run_id is timestamp by default
+# AWS: run_id is DATE, Local: run_id is timestamped by default
 RUN_ID = os.getenv("RUN_ID") or (DATE_STR if DEPLOY_ENV == "aws" else TS_STR)
 
 # Where logs/metrics should go locally (AWS uses stdout logs, and uploads metrics to S3)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_RUN_DIR = Path(os.getenv("RUN_DIR", str(PROJECT_ROOT / "output" / f"run_{RUN_ID}")))
 
-# Crawl responsibly by identifying yourself (and your website) on the user-agent
-# USER_AGENT = "core (+http://www.yourdomain.com)"
-
-# Obey robots.txt rules
-ROBOTSTXT_OBEY = os.getenv("ROBOTSTXT_OBEY", "0") == "1"
 
 # -----------------------------------------------------------------------------
 # Logging + stats
@@ -95,6 +86,7 @@ AUTOTHROTTLE_DEBUG = False
 # -----------------------------------------------------------------------------
 # Default headers / UA
 # -----------------------------------------------------------------------------
+# or use a pool of user agents and rotate them in a custom downloader middleware for better anti-scraping evasion
 USER_AGENT = os.getenv(
     "USER_AGENT",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -105,11 +97,19 @@ USER_AGENT = os.getenv(
 DEFAULT_REQUEST_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "DNT": "1",
+    "Upgrade-Insecure-Requests": "1",
 }
+
+# Obey robots.txt rules
+ROBOTSTXT_OBEY = os.getenv("ROBOTSTXT_OBEY", "0") == "1"
 
 # Public job pages don't need cookies
 # Disable cookies (enabled by default)
-COOKIES_ENABLED = False
+COOKIES_ENABLED = os.getenv("COOKIES_ENABLED", "0") == "1"
 REDIRECT_ENABLED = True
 
 # -----------------------------------------------------------------------------
@@ -119,24 +119,6 @@ RETRY_ENABLED = True
 RETRY_TIMES = int(os.getenv("RETRY_TIMES", "4"))
 RETRY_HTTP_CODES = [408, 429, 500, 502, 503, 504, 522, 524]
 
-
-# Enable or disable spider middlewares
-# See https://docs.scrapy.org/en/latest/topics/spider-middleware.html
-# SPIDER_MIDDLEWARES = {
-#    "core.middlewares.CoreSpiderMiddleware": 543,
-# }
-
-# Enable or disable downloader middlewares
-# See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html
-# DOWNLOADER_MIDDLEWARES = {
-#    "core.middlewares.CoreDownloaderMiddleware": 543,
-# }
-
-# Enable or disable extensions
-# See https://docs.scrapy.org/en/latest/topics/extensions.html
-# EXTENSIONS = {
-#    "scrapy.extensions.telnet.TelnetConsole": None,
-# }
 
 # Enable and configure HTTP caching (disabled by default)
 # See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html#httpcache-middleware-settings
@@ -228,8 +210,5 @@ FEEDS = {
     }
 }
 
-# -----------------------------------------------------------------------------
-# Misc
-# -----------------------------------------------------------------------------
 # Keep Scrapy’s modern request fingerprinting behavior stable across versions.
 REQUEST_FINGERPRINTER_IMPLEMENTATION = "2.7"

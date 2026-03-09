@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from aws_cdk import CfnOutput, RemovalPolicy, Stack
 from aws_cdk import aws_ecr as ecr
 from constructs import Construct
