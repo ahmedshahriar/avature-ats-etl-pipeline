@@ -84,6 +84,7 @@ instance/
 
 # Scrapy stuff:
 .scrapy
+jobstate
 
 # Sphinx documentation
 docs/_build/
@@ -222,3 +223,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# local directory
+analysis
+backups
+data
+output

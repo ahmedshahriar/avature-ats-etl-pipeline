@@ -6,33 +6,41 @@ authors = [
     { name = "Ahmed Shahriar Sakib", email = "ahmed.shahriar.sakib@gmail.com" }
 ]
 requires-python = ">=3.13"
+# Core Scrapy runtime deps for local development.
+# ECS/Docker production install is handled separately via requirements.txt — not uv.
 dependencies = [
     "scrapy>=2.14.1",
     "pandas>=2.2.0",
     "beautifulsoup4>=4.14.3",
 ]
 
-[project.optional-dependencies]
-aws = [
-    "aws-cdk-lib>=2.241.0",
-    "boto3>=1.42.62",
-    "constructs>=10.5.1",
-]
-
 [dependency-groups]
-analysis = [
-    "jupyter>=1.1.1",
-    "matplotlib>=3.10.8",
-    "seaborn>=0.13.2",
+# Scrapy local dev only — loads .env for the spider.
+# Not needed in ECS (uses task definition); settings.py already guards it with try/except.
+local = [
+    "python-dotenv>=1.2.2",
 ]
+# CDK infra app + unit tests.
+# Used in local dev and CI, but not in Docker (CDK is only for infra provisioning, not runtime).
+infra = [
+    "aws-cdk-lib>=2.241.0",
+    "constructs>=10.5.1",
+    "python-dotenv>=1.2.2",
+    "pytest>=9.0.2",
+]
+# tooling — linters, formatters, type checkers, stubs. Never shipped.
 dev = [
     "boto3-stubs[cloudwatch,dynamodb,ecr,ecs,events,logs,s3,sns]>=1.42.62",
     "pandas-stubs>=3.0.0.260204",
     "pre-commit>=4.5.1",
-    "pytest>=9.0.2",
-    "python-dotenv>=1.2.2",
     "ruff>=0.15.5",
     "ty>=0.0.21",
+]
+# Data analysis notebooks — never used in CI or Docker.
+analysis = [
+    "jupyter>=1.1.1",
+    "matplotlib>=3.10.8",
+    "seaborn>=0.13.2",
 ]
 
 [tool.uv]
