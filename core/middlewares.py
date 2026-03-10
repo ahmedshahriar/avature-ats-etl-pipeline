@@ -1,6 +1,5 @@
 from scrapy import signals
 
-
 # useful for handling different item types with a single interface
 
 
@@ -28,7 +27,7 @@ class CoreSpiderMiddleware:
 
         # Must return an iterable of Request, or item objects.
         for i in result:
-            yield i
+            yield from i
 
     def process_spider_exception(self, response, exception, spider):
         # Called when a spider or process_spider_input() method
@@ -44,7 +43,7 @@ class CoreSpiderMiddleware:
             yield item_or_request
 
     def spider_opened(self, spider):
-        spider.logger.info("Spider opened: %s" % spider.name)
+        spider.logger.info("Spider opened: %s", spider.name)
 
 
 class CoreDownloaderMiddleware:
@@ -90,4 +89,4 @@ class CoreDownloaderMiddleware:
         pass
 
     def spider_opened(self, spider):
-        spider.logger.info("Spider opened: %s" % spider.name)
+        spider.logger.info("Spider opened: %s", spider.name)

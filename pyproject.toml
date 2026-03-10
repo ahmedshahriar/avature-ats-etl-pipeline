@@ -6,19 +6,63 @@ authors = [
     { name = "Ahmed Shahriar Sakib", email = "ahmed.shahriar.sakib@gmail.com" }
 ]
 requires-python = ">=3.13"
+# Core Scrapy runtime deps for local development.
+# ECS/Docker production install is handled separately via requirements.txt — not uv.
 dependencies = [
     "scrapy>=2.14.1",
     "pandas>=2.2.0",
+    "beautifulsoup4>=4.14.3",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
+# Scrapy local dev only — loads .env for the spider.
+# Not needed in ECS (uses task definition); settings.py already guards it with try/except.
+local = [
+    "python-dotenv>=1.2.2",
+]
+# CDK infra app + unit tests.
+# Used in local dev and CI, but not in Docker (CDK is only for infra provisioning, not runtime).
+infra = [
+    "aws-cdk-lib>=2.241.0",
+    "constructs>=10.5.1",
+    "python-dotenv>=1.2.2",
+    "pytest>=9.0.2",
+]
+# tooling — linters, formatters, type checkers, stubs. Never shipped.
+dev = [
+    "boto3-stubs[cloudwatch,dynamodb,ecr,ecs,events,logs,s3,sns]>=1.42.62",
+    "pandas-stubs>=3.0.0.260204",
+    "pre-commit>=4.5.1",
+    "ruff>=0.15.5",
+    "ty>=0.0.21",
+]
+# Data analysis notebooks — never used in CI or Docker.
 analysis = [
     "jupyter>=1.1.1",
     "matplotlib>=3.10.8",
-    "pandas-stubs>=3.0.0.260204",
     "seaborn>=0.13.2",
 ]
-aws = [
-    "boto3>=1.42.61",
-    "boto3-stubs>=1.42.61",
-]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ty]
+[tool.ty.environment]
+extra-paths = ["infra"]
+
+[tool.ty.src]
+include = ["infra", "core"]
+
+[tool.ty.rules]
+possibly-unresolved-reference = "warn"
+
+[tool.pytest.ini_options]
+testpaths = ["infra/tests"]
+pythonpath = ["infra"]

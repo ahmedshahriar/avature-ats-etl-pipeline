@@ -14,6 +14,7 @@ class AvatureJobItem(scrapy.Item):
     scraper and are intentionally liberal (many are optional) to allow
     for gradual normalisation.
     """
+
     job_hash = scrapy.Field()
     source_url = scrapy.Field()  # canonical URL of the job detail page
 
