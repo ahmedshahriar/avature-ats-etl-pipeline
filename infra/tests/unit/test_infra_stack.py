@@ -4,8 +4,7 @@ from stacks.base_stack import AvatureEtlBaseStack
 from stacks.ecr_stack import AvatureEtlEcrStack
 from stacks.ecs_schedule_stack import AvatureEtlEcsScheduleStack
 from stacks.notifications_stack import AvatureEtlNotificationsStack
-
-from infra.stacks.runtime_alarm_stack import AvatureEtlRuntimeAlarmStack
+from stacks.runtime_alarm_stack import AvatureEtlRuntimeAlarmStack
 
 
 def test_base_stack_resources_created():

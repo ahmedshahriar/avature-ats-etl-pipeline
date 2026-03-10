@@ -151,7 +151,6 @@ ls -la output/run_*/   # latest run directory
 - ECS cluster and Fargate task definition
 - CloudWatch log group
 - S3 bucket for outputs
-- 
 - DynamoDB table for cross-run dedupe
 - EventBridge Scheduler (daily trigger)
 

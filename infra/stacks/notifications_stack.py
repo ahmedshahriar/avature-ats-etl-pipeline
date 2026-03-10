@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from aws_cdk import CfnOutput, Duration, Stack
 from aws_cdk import aws_cloudwatch as cloudwatch
 from aws_cdk import aws_cloudwatch_actions as cloudwatch_actions
