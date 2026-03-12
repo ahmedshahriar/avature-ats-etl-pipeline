@@ -1,0 +1,43 @@
+project_name: "avature-etl"
+bucket_suffix: "outputs"
+ddb_table_suffix: "seen-jobs"
+
+# Higher compute allocation for production
+ecs_task_cpu: 1024
+ecs_task_memory: 2048
+
+# replace with email to receive alerts, or leave null to disable
+alert_email: null
+
+# ECS Scheduler (Runs daily at 9:00 AM UTC)
+schedule_hour: "9"
+schedule_minute: "0"
+schedule_timezone: "UTC"
+schedule_enabled: true
+
+tags:
+  Owner: "ahmed"
+  ManagedBy: "cdk"
+  CostCenter: "free-tier"
+
+scraper_runtime:
+  concurrent_requests: 8
+  concurrent_requests_per_domain: 4
+  download_delay: 1.0
+  download_timeout: 30
+
+  # AutoThrottle tuning
+  autothrottle_enabled: true
+  autothrottle_start_delay: 1.0
+  autothrottle_max_delay: 20.0
+  autothrottle_target_concurrency: 1.0
+  retry_times: 4
+
+  # Standard logging for prod to save CloudWatch costs
+  log_level: "INFO"
+  logstats_interval: 30.0
+
+  dynamodb_ttl_days: 60
+  ddb_dedupe_fail_open: false
+  scrapy_feed_name: "jobs.jsonl"
+  metrics_file: "metrics.json"

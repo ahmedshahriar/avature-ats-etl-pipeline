@@ -1,0 +1,211 @@
+# This workflow handles CD to both dev and prod environments.
+# A push to main will trigger a deployment to dev using the commit SHA as the image tag.
+# Once the dev deployment is verified, the same image tag can be promoted to prod using the manual workflow trigger.
+
+
+name: cd
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Existing image tag to promote to prod (usually a commit SHA already deployed to dev)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy-dev:
+    name: Deploy dev
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: dev
+    concurrency:
+      group: deploy-dev
+      cancel-in-progress: false
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      IMAGE_TAG: ${{ github.sha }}
+      ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install infra dependencies
+        run: uv sync --frozen --only-group infra
+
+      - name: Install CDK CLI
+        run: npm install -g aws-cdk@2
+
+      - name: Load project name from dev config
+        run: |
+          PROJECT_NAME=$(uv run python -c "from pathlib import Path; from yaml import safe_load; print(safe_load(Path('infra/environments/dev.yaml').read_text())['project_name'])")
+          echo "PROJECT_NAME=$PROJECT_NAME" >> "$GITHUB_ENV"
+
+      - name: Configure AWS credentials from GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-session-name: gha-${{ github.run_id }}-dev
+          mask-aws-account-id: true
+
+      - name: Ensure shared ECR stack exists
+        working-directory: infra
+        run: |
+          cdk deploy "${PROJECT_NAME}-ecr" \
+            --app "uv run python app.py" \
+            --require-approval never \
+            -c env=dev
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push ARM64 image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker buildx build \
+            --platform linux/arm64 \
+            --pull \
+            --push \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            --tag "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=$IMAGE_TAG" \
+            .
+
+      - name: Deploy CDK to dev
+        working-directory: infra
+        run: |
+          cdk deploy --app "uv run python app.py" --all \
+            --require-approval never \
+            -c env=dev \
+            -c imageTag="$IMAGE_TAG"
+
+      - name: Record promotion tag
+        run: |
+          {
+            echo "## Dev deployment complete"
+            echo
+            echo "- Image tag: \`$IMAGE_TAG\`"
+            echo "- Promote this exact tag to prod with the manual workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-prod:
+    name: Deploy prod
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: prod
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
+      ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+
+    steps:
+      - name: Validate image tag format
+        run: |
+          if [[ ! "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "image_tag must be the full 40-character git commit SHA from the dev deployment." >&2
+            exit 1
+          fi
+
+      - name: Checkout promoted commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.image_tag }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install infra dependencies
+        run: uv sync --frozen --only-group infra
+
+      - name: Install CDK CLI
+        run: npm install -g aws-cdk@2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-session-name: gha-${{ github.run_id }}-prod
+          mask-aws-account-id: true
+
+      - name: Verify image exists in ECR
+        run: |
+          aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="$IMAGE_TAG" >/dev/null
+
+      - name: Deploy CDK to prod
+        working-directory: infra
+        run: |
+          cdk deploy --app "uv run python app.py" --all \
+            --require-approval never \
+            -c env=prod \
+            -c imageTag="$IMAGE_TAG"
+
+      - name: Record deployment summary
+        run: |
+          {
+            echo "## Prod deployment complete"
+            echo
+            echo "- Image tag: \`$IMAGE_TAG\`"
+            echo "- Source commit checked out: \`$IMAGE_TAG\`"
+          } >> "$GITHUB_STEP_SUMMARY"
