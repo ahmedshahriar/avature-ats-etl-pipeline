@@ -1,5 +1,12 @@
-import os
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "y", "on")
 
 
 @dataclass(frozen=True)
@@ -26,26 +33,28 @@ class ScraperRuntimeConfig:
     metrics_file: str
 
     @classmethod
-    def from_env(cls) -> "ScraperRuntimeConfig":
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ScraperRuntimeConfig":
+        """This method happily accepts the dictionary created by your YAML file!"""
         return cls(
-            concurrent_requests=int(os.environ["CONCURRENT_REQUESTS"]),
-            concurrent_requests_per_domain=int(os.environ["CONCURRENT_REQUESTS_PER_DOMAIN"]),
-            download_delay=float(os.environ["DOWNLOAD_DELAY"]),
-            download_timeout=int(os.environ["DOWNLOAD_TIMEOUT"]),
-            autothrottle_enabled=os.environ["AUTOTHROTTLE_ENABLED"].lower() in ("1", "true", "yes"),
-            autothrottle_start_delay=float(os.environ["AUTOTHROTTLE_START_DELAY"]),
-            autothrottle_max_delay=float(os.environ["AUTOTHROTTLE_MAX_DELAY"]),
-            autothrottle_target_concurrency=float(os.environ["AUTOTHROTTLE_TARGET_CONCURRENCY"]),
-            retry_times=int(os.environ["RETRY_TIMES"]),
-            log_level=os.environ["LOG_LEVEL"],
-            logstats_interval=float(os.environ["LOGSTATS_INTERVAL"]),
-            dynamodb_ttl_days=int(os.environ["DYNAMODB_TTL_DAYS"]),
-            ddb_dedupe_fail_open=os.environ["DDB_DEDUPE_FAIL_OPEN"].lower() in ("1", "true", "yes"),
-            scrapy_feed_name=os.environ["SCRAPY_FEED_NAME"],
-            metrics_file=os.environ["METRICS_FILE"],
+            concurrent_requests=int(data["concurrent_requests"]),
+            concurrent_requests_per_domain=int(data["concurrent_requests_per_domain"]),
+            download_delay=float(data["download_delay"]),
+            download_timeout=int(data["download_timeout"]),
+            autothrottle_enabled=_as_bool(data["autothrottle_enabled"]),
+            autothrottle_start_delay=float(data["autothrottle_start_delay"]),
+            autothrottle_max_delay=float(data["autothrottle_max_delay"]),
+            autothrottle_target_concurrency=float(data["autothrottle_target_concurrency"]),
+            retry_times=int(data["retry_times"]),
+            log_level=str(data["log_level"]),
+            logstats_interval=float(data["logstats_interval"]),
+            dynamodb_ttl_days=int(data["dynamodb_ttl_days"]),
+            ddb_dedupe_fail_open=_as_bool(data["ddb_dedupe_fail_open"]),
+            scrapy_feed_name=str(data["scrapy_feed_name"]),
+            metrics_file=str(data["metrics_file"]),
         )
 
     def to_env(self) -> dict[str, str]:
+        """Converts the config back to strings so ECS can inject them into the Docker container."""
         return {
             "CONCURRENT_REQUESTS": str(self.concurrent_requests),
             "CONCURRENT_REQUESTS_PER_DOMAIN": str(self.concurrent_requests_per_domain),
