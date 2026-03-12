@@ -51,8 +51,8 @@ class AppConfig:
 
         raw_tags = data.get("tags", {})
         tags = {
-            "Project": raw_tags.get("Project", project_name),
-            "Environment": raw_tags.get("Environment", env_name),
+            "Project": project_name,
+            "Environment": env_name,
             **{k: v for k, v in raw_tags.items() if v is not None},
         }
 

@@ -1,0 +1,43 @@
+project_name: "avature-etl"
+bucket_suffix: "outputs"
+ddb_table_suffix: "seen-jobs"
+
+# Compute scaling for development testing
+ecs_task_cpu: 512
+ecs_task_memory: 1024
+
+# replace with email to receive alerts, or leave null to disable
+alert_email: null
+
+# ECS Scheduler (Disabled in dev by default)
+schedule_hour: "9"
+schedule_minute: "0"
+schedule_timezone: "UTC"
+schedule_enabled: false
+
+tags:
+  Owner: "ahmed"
+  ManagedBy: "cdk"
+  CostCenter: "free-tier"
+
+scraper_runtime:
+  concurrent_requests: 8
+  concurrent_requests_per_domain: 4
+  download_delay: 1.0
+  download_timeout: 30
+
+  # AutoThrottle tuning
+  autothrottle_enabled: true
+  autothrottle_start_delay: 1.0
+  autothrottle_max_delay: 20.0
+  autothrottle_target_concurrency: 1.0
+  retry_times: 4
+
+  # Extra verbose logging for dev
+  log_level: "DEBUG"
+  logstats_interval: 30.0
+
+  dynamodb_ttl_days: 30
+  ddb_dedupe_fail_open: false
+  scrapy_feed_name: "jobs.jsonl"
+  metrics_file: "metrics.json"

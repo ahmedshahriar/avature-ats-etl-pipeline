@@ -54,10 +54,7 @@ class AvatureEtlBaseStack(Stack):
         table_removal = RemovalPolicy.RETAIN if is_prod else RemovalPolicy.DESTROY
         log_removal = RemovalPolicy.RETAIN if is_prod else RemovalPolicy.DESTROY
 
-        # ---- S3 Bucket (globally unique name) ----
-        # Bucket names must be globally unique.
-        # pattern syntax: https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
-        bucket_name = f"{prefix}-{bucket_suffix}-{self.account}-{self.region}".lower()
+        bucket_name = f"{prefix}-{stage}-{bucket_suffix}-{self.account}-{self.region}".lower()
 
         self.outputs_bucket = s3.Bucket(
             self,
@@ -80,7 +77,7 @@ class AvatureEtlBaseStack(Stack):
         self.seen_jobs_table = dynamodb.Table(
             self,
             "SeenJobsTable",
-            table_name=f"{prefix}-{ddb_table_suffix}",
+            table_name=f"{prefix}-{stage}-{ddb_table_suffix}",
             partition_key=dynamodb.Attribute(name="job_hash", type=dynamodb.AttributeType.STRING),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,  # cheapest/least ops for daily batch
             time_to_live_attribute="expires_at",  # optional TTL; pipeline can set it
@@ -94,8 +91,8 @@ class AvatureEtlBaseStack(Stack):
         self.ecs_log_group = logs.LogGroup(
             self,
             "EcsLogGroup",
-            log_group_name=f"/ecs/{prefix}",
-            retention=logs.RetentionDays.TWO_WEEKS if not is_prod else logs.RetentionDays.ONE_MONTH,
+            log_group_name=f"/ecs/{prefix}-{stage}",
+            retention=logs.RetentionDays.ONE_MONTH if is_prod else logs.RetentionDays.TWO_WEEKS,
             removal_policy=log_removal,
         )
 
