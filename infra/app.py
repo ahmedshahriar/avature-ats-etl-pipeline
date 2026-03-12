@@ -9,30 +9,39 @@ from stacks.notifications_stack import AvatureEtlNotificationsStack
 from stacks.runtime_alarm_stack import AvatureEtlRuntimeAlarmStack
 
 app = App()
-cfg = AppConfig.from_env()
+
+deploy_env = str(app.node.try_get_context("env") or os.getenv("ENV_NAME", "dev")).lower()
+if deploy_env not in {"dev", "prod"}:
+    raise ValueError("Deployment environment must be 'dev' or 'prod'")
+
+image_tag = str(app.node.try_get_context("imageTag") or os.getenv("IMAGE_TAG", "latest"))
+
+cfg = AppConfig.load(deploy_env)
+
+aws_env = Environment(
+    account=os.getenv("CDK_DEFAULT_ACCOUNT"),
+    region=os.getenv("CDK_DEFAULT_REGION"),
+)
 
 for k, v in cfg.tags.items():
     Tags.of(app).add(k, v)
 
-base_stack = AvatureEtlBaseStack(
-    app,
-    f"{cfg.project_name}-base",
-    prefix=cfg.project_name,
-    stage=cfg.env_name,
-    bucket_suffix=cfg.bucket_suffix,
-    ddb_table_suffix=cfg.ddb_table_suffix,
-    env=Environment(account=os.getenv("CDK_DEFAULT_ACCOUNT"), region=os.getenv("CDK_DEFAULT_REGION")),
-)
-
+# Shared ECR repository for build-once/promote-many
 ecr_stack = AvatureEtlEcrStack(
     app,
     f"{cfg.project_name}-ecr",
     prefix=cfg.project_name,
+    env=aws_env,
+)
+
+base_stack = AvatureEtlBaseStack(
+    app,
+    f"{cfg.project_name}-base-{cfg.env_name}",
+    prefix=cfg.project_name,
     stage=cfg.env_name,
-    env=Environment(
-        account=os.getenv("CDK_DEFAULT_ACCOUNT"),
-        region=os.getenv("CDK_DEFAULT_REGION"),
-    ),
+    bucket_suffix=cfg.bucket_suffix,
+    ddb_table_suffix=cfg.ddb_table_suffix,
+    env=aws_env,
 )
 
 # ECS + Scheduler are merged into one stack to eliminate Fn::ImportValue cross-stack locks.
@@ -41,9 +50,10 @@ ecr_stack = AvatureEtlEcrStack(
 # stack imports them. Merging eliminates that constraint entirely.
 ecs_stack = AvatureEtlEcsScheduleStack(
     app,
-    f"{cfg.project_name}-ecs",
+    f"{cfg.project_name}-ecs-{cfg.env_name}",
     prefix=cfg.project_name,
     stage=cfg.env_name,
+    image_tag=image_tag,
     ecs_task_cpu=cfg.ecs_task_cpu,
     ecs_task_memory=cfg.ecs_task_memory,
     outputs_bucket=base_stack.outputs_bucket,
@@ -51,40 +61,31 @@ ecs_stack = AvatureEtlEcsScheduleStack(
     ecs_log_group=base_stack.ecs_log_group,
     repository=ecr_stack.repository,
     scraper_runtime_env=cfg.scraper_runtime.to_env(),
-    schedule_hour="9" if cfg.env_name == "prod" else "10",
-    schedule_minute="0",
-    schedule_timezone="UTC",
-    schedule_enabled=(cfg.env_name == "prod"),
-    env=Environment(
-        account=os.getenv("CDK_DEFAULT_ACCOUNT"),
-        region=os.getenv("CDK_DEFAULT_REGION"),
-    ),
+    schedule_hour=cfg.schedule_hour,
+    schedule_minute=cfg.schedule_minute,
+    schedule_timezone=cfg.schedule_timezone,
+    schedule_enabled=cfg.schedule_enabled,
+    env=aws_env,
 )
 
 notifications_stack = AvatureEtlNotificationsStack(
     app,
-    f"{cfg.project_name}-notifications",
+    f"{cfg.project_name}-notifications-{cfg.env_name}",
     prefix=cfg.project_name,
     stage=cfg.env_name,
     scheduler_dlq=ecs_stack.dlq,
     alert_email=cfg.alert_email,
-    env=Environment(
-        account=os.getenv("CDK_DEFAULT_ACCOUNT"),
-        region=os.getenv("CDK_DEFAULT_REGION"),
-    ),
+    env=aws_env,
 )
 
 runtime_alarm_stack = AvatureEtlRuntimeAlarmStack(
     app,
-    f"{cfg.project_name}-runtime-alarms",
+    f"{cfg.project_name}-runtime-alarms-{cfg.env_name}",
     prefix=cfg.project_name,
     stage=cfg.env_name,
     topic=notifications_stack.topic,  # ty: ignore[invalid-argument-type]
     spider_name="avature",
-    env=Environment(
-        account=os.getenv("CDK_DEFAULT_ACCOUNT"),
-        region=os.getenv("CDK_DEFAULT_REGION"),
-    ),
+    env=aws_env,
 )
 
 ecs_stack.add_dependency(base_stack)

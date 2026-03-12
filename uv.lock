@@ -151,6 +151,7 @@ infra = [
     { name = "constructs" },
     { name = "pytest" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
 ]
 local = [
     { name = "python-dotenv" },
@@ -181,6 +182,7 @@ infra = [
     { name = "constructs", specifier = ">=10.5.1" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
 ]
 local = [{ name = "python-dotenv", specifier = ">=1.2.2" }]
 
