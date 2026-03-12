@@ -3,7 +3,7 @@
 # Once the dev deployment is verified, the same image tag can be promoted to prod using the manual workflow trigger.
 
 
-name: cd
+name: CD
 
 on:
   push:
@@ -39,13 +39,13 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           persist-credentials: false
           fetch-depth: 1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -56,9 +56,9 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Install infra dependencies
         run: uv sync --frozen --only-group infra
@@ -88,7 +88,7 @@ jobs:
             -c env=dev
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to Amazon ECR
         id: login-ecr
@@ -151,14 +151,14 @@ jobs:
           fi
 
       - name: Checkout promoted commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ inputs.image_tag }}
           persist-credentials: false
           fetch-depth: 1
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -169,9 +169,9 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Install infra dependencies
         run: uv sync --frozen --only-group infra
