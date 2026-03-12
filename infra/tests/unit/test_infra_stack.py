@@ -1,3 +1,8 @@
+"""
+Unit tests for infra stacks.
+
+"""
+
 import aws_cdk as cdk
 import pytest
 from aws_cdk.assertions import Match, Template
@@ -34,8 +39,6 @@ def base_stack(app, aws_env):
         stage="dev",
         bucket_suffix="test-bucket",
         ddb_table_suffix="seen-jobs",
-        s3_retention_days=14,  # FIXED: Added missing argument
-        log_retention_days=14,  # FIXED: Added missing argument
         env=aws_env,
     )
 

@@ -64,7 +64,7 @@ class AppConfig:
             ddb_table_suffix=data["ddb_table_suffix"],
             ecs_task_cpu=int(data["ecs_task_cpu"]),
             ecs_task_memory=int(data["ecs_task_memory"]),
-            alert_email=(data.get("alert_email") or "").strip() or None,
+            alert_email=(data.get("alert_email") or os.getenv("ALERT_EMAIL") or "").strip() or None,
             schedule_hour=str(data.get("schedule_hour", "9")),
             schedule_minute=str(data.get("schedule_minute", "0")),
             schedule_timezone=str(data.get("schedule_timezone", "UTC")),
