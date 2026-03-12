@@ -72,6 +72,11 @@ jobs:
     name: "Synth - CDK synthesis check"
     runs-on: ubuntu-latest
     needs: qa
+    # CDK_DEFAULT_ACCOUNT / REGION are shared by all steps in this job.
+    # They are intentionally fake — no real AWS calls are made.
+    env:
+      CDK_DEFAULT_ACCOUNT: "111111111111"
+      CDK_DEFAULT_REGION: "us-east-1"
 
     steps:
       - name: Checkout
@@ -99,11 +104,43 @@ jobs:
       - name: Install CDK CLI
         run: npm install -g aws-cdk@2
 
+      # Dummy VPC context so CDK does not attempt a live AWS lookup.
+      - name: Write dummy CDK context for synthesis
+        working-directory: infra
+        run: |
+          cat > cdk.context.json << 'EOF'
+          {
+            "vpc-provider:account=111111111111:filter.isDefault=true:region=us-east-1:returnAsymmetricSubnets=true": {
+              "vpcId": "vpc-11111111",
+              "vpcCidrBlock": "172.31.0.0/16",
+              "ownerAccountId": "111111111111",
+              "availabilityZones": [],
+              "subnetGroups": [
+                {
+                  "name": "Public",
+                  "type": "Public",
+                  "subnets": [
+                    {
+                      "subnetId": "subnet-11111111",
+                      "cidr": "172.31.0.0/20",
+                      "availabilityZone": "us-east-1a",
+                      "routeTableId": "rtb-11111111"
+                    },
+                    {
+                      "subnetId": "subnet-22222222",
+                      "cidr": "172.31.16.0/20",
+                      "availabilityZone": "us-east-1b",
+                      "routeTableId": "rtb-22222222"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+          EOF
+
       - name: CDK synth — dev
         working-directory: infra
-        env:
-          CDK_DEFAULT_ACCOUNT: "111111111111"
-          CDK_DEFAULT_REGION: "us-east-1"
         run: |
           cdk synth --app "uv run python app.py" \
             -c env=dev \
@@ -112,9 +149,6 @@ jobs:
 
       - name: CDK synth — prod
         working-directory: infra
-        env:
-          CDK_DEFAULT_ACCOUNT: "111111111111"
-          CDK_DEFAULT_REGION: "us-east-1"
         run: |
           cdk synth --app "uv run python app.py" \
             -c env=prod \
