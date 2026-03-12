@@ -1,4 +1,4 @@
-from aws_cdk import CfnOutput, CfnParameter, Duration, Stack, TimeZone
+from aws_cdk import CfnOutput, Duration, Stack, TimeZone
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_ecr as ecr
@@ -20,6 +20,7 @@ class AvatureEtlEcsScheduleStack(Stack):
         *,
         prefix: str,
         stage: str,
+        image_tag: str,
         ecs_task_cpu: int,
         ecs_task_memory: int,
         outputs_bucket: s3.IBucket,
@@ -45,7 +46,7 @@ class AvatureEtlEcsScheduleStack(Stack):
         cluster = ecs.Cluster(
             self,
             "Cluster",
-            cluster_name=f"{prefix}-cluster",
+            cluster_name=f"{prefix}-{stage}-cluster",
             vpc=vpc,
             # either use ENHANCED or ENABLED for optimal performance and features.
             # ENHANCED is newer and recommended if supported.
@@ -57,8 +58,8 @@ class AvatureEtlEcsScheduleStack(Stack):
             self,
             "TaskSecurityGroup",
             vpc=vpc,
-            security_group_name=f"{prefix}-task-sg",
-            description="Security group for Avature ETL ECS tasks",
+            security_group_name=f"{prefix}-{stage}-task-sg",
+            description=f"Security group for {prefix} ECS tasks [{stage}]",
             allow_all_outbound=True,
         )
 
@@ -68,7 +69,7 @@ class AvatureEtlEcsScheduleStack(Stack):
         execution_role: iam.IRole = iam.Role(  # ty: ignore[invalid-assignment]
             self,
             "ExecutionRole",
-            role_name=f"{prefix}-ecs-execution-role" if not is_prod else None,
+            role_name=f"{prefix}-{stage}-ecs-execution-role",
             assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"),  # ty: ignore[invalid-argument-type]
             description="ECS task execution role for pulling images and writing logs",
             managed_policies=[
@@ -81,7 +82,7 @@ class AvatureEtlEcsScheduleStack(Stack):
         task_role: iam.IRole = iam.Role(  # ty: ignore[invalid-assignment]
             self,
             "TaskRole",
-            role_name=f"{prefix}-ecs-task-role" if not is_prod else None,
+            role_name=f"{prefix}-{stage}-ecs-task-role",
             assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"),  # ty: ignore[invalid-argument-type]
             description="Application task role for S3/DynamoDB access",
         )
@@ -91,20 +92,11 @@ class AvatureEtlEcsScheduleStack(Stack):
         outputs_bucket.grant_put(task_role)
         seen_jobs_table.grant(task_role, "dynamodb:PutItem", "dynamodb:DescribeTable")
 
-        # Image tag supplied at deploy time (Option A friendly)
-        image_tag = CfnParameter(
-            self,
-            "ImageTag",
-            type="String",
-            default="latest",
-            description="ECR image tag to run for the scraper container",
-        )
-
         # Fargate task definition (ARM64)
         task_definition = ecs.FargateTaskDefinition(
             self,
             "TaskDefinition",
-            family=f"{prefix}-task",
+            family=f"{prefix}-{stage}-task",
             cpu=ecs_task_cpu,
             memory_limit_mib=ecs_task_memory,
             execution_role=execution_role,
@@ -115,13 +107,10 @@ class AvatureEtlEcsScheduleStack(Stack):
             ),
         )
 
-        container = task_definition.add_container(
+        task_definition.add_container(
             "ScraperContainer",
-            container_name=f"{prefix}-scraper",
-            image=ecs.ContainerImage.from_ecr_repository(
-                repository,
-                tag=image_tag.value_as_string,
-            ),
+            container_name=f"{prefix}-{stage}-scraper",
+            image=ecs.ContainerImage.from_ecr_repository(repository, tag=image_tag),
             essential=True,
             logging=ecs.LogDrivers.aws_logs(
                 stream_prefix="ecs",
@@ -131,6 +120,7 @@ class AvatureEtlEcsScheduleStack(Stack):
                 "DEPLOY_ENV": "aws",
                 "PROJECT_NAME": prefix,
                 "ENV_NAME": stage,
+                "STACK_STAGE": stage,
                 "S3_BUCKET_NAME": outputs_bucket.bucket_name,
                 "DYNAMODB_TABLE_NAME": seen_jobs_table.table_name,
                 **scraper_runtime_env,
@@ -138,9 +128,6 @@ class AvatureEtlEcsScheduleStack(Stack):
             command=["scrapy", "crawl", "avature"],
             working_directory="/app",
         )
-
-        container.add_environment("STACK_STAGE", stage)
-        container.add_environment("LOG_LEVEL", "INFO" if is_prod else "DEBUG")
 
         # NOTE:
         # The scheduler lives in the ECS stack, so TaskDefinition is no longer a
@@ -159,7 +146,7 @@ class AvatureEtlEcsScheduleStack(Stack):
         scheduler_role = iam.Role(
             self,
             "SchedulerExecutionRole",
-            role_name=f"{prefix}-{stage}-scheduler-role" if not is_prod else None,
+            role_name=f"{prefix}-{stage}-scheduler-role",
             assumed_by=iam.ServicePrincipal("scheduler.amazonaws.com"),  # ty: ignore[invalid-argument-type]
             description="Execution role for EventBridge Scheduler to run ECS Fargate task",
         )
@@ -211,7 +198,7 @@ class AvatureEtlEcsScheduleStack(Stack):
         CfnOutput(self, "TaskSecurityGroupId", value=task_sg.security_group_id)
         CfnOutput(self, "ExecutionRoleArn", value=execution_role.role_arn)
         CfnOutput(self, "TaskRoleArn", value=task_role.role_arn)
-        CfnOutput(self, "ImageTagParameterName", value=image_tag.logical_id)
+        CfnOutput(self, "ImageTag", value=image_tag)
         CfnOutput(self, "Stage", value=stage)
         CfnOutput(self, "ScheduleName", value=sched.schedule_name)
         CfnOutput(self, "ScheduleArn", value=sched.schedule_arn)

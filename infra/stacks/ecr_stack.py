@@ -4,7 +4,7 @@ from constructs import Construct
 
 
 class AvatureEtlEcrStack(Stack):
-    def __init__(self, scope: Construct, construct_id: str, *, prefix: str, stage: str = "dev", **kwargs) -> None:
+    def __init__(self, scope: Construct, construct_id: str, *, prefix: str, stage: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         stage = (stage or "dev").lower()

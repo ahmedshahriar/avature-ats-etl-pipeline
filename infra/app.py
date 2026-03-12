@@ -31,6 +31,7 @@ ecr_stack = AvatureEtlEcrStack(
     app,
     f"{cfg.project_name}-ecr",
     prefix=cfg.project_name,
+    stage=cfg.env_name,
     env=aws_env,
 )
 

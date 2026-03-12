@@ -34,7 +34,7 @@ class ScraperRuntimeConfig:
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "ScraperRuntimeConfig":
-        """This method happily accepts the dictionary created by your YAML file!"""
+        """Creates a ScraperRuntimeConfig from a mapping of string keys to any values (e.g., environment variables)."""
         return cls(
             concurrent_requests=int(data["concurrent_requests"]),
             concurrent_requests_per_domain=int(data["concurrent_requests_per_domain"]),
