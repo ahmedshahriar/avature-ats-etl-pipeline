@@ -1,4 +1,4 @@
-# CI — lint, type-check, and unit tests
+# CI — lint, type-check, unit tests, and CDK synthesis validation.
 # Runs on every push and pull request to main.
 # Does NOT deploy anything or touch AWS.
 
@@ -23,10 +23,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -37,7 +37,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Install dev dependencies
-        run: uv sync --group dev --group infra --group local
+        run: uv sync --frozen --group dev --group infra --group local
 
       - name: Run pre-commit (ruff + ty)
         run: uv run pre-commit run --all-files
@@ -49,10 +49,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -63,7 +63,60 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
-        run: uv sync --only-group infra
+        run: uv sync --frozen --only-group infra
 
       - name: Run unit tests
         run: uv run pytest -v --tb=short
+
+  synth:
+    name: "Synth - CDK synthesis check"
+    runs-on: ubuntu-latest
+    needs: qa
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install infra dependencies
+        run: uv sync --frozen --only-group infra
+
+      - name: Install CDK CLI
+        run: npm install -g aws-cdk@2
+
+      - name: CDK synth — dev
+        working-directory: infra
+        env:
+          CDK_DEFAULT_ACCOUNT: "111111111111"
+          CDK_DEFAULT_REGION: "us-east-1"
+        run: |
+          cdk synth --app "uv run python app.py" \
+            -c env=dev \
+            -c imageTag=latest \
+            --quiet
+
+      - name: CDK synth — prod
+        working-directory: infra
+        env:
+          CDK_DEFAULT_ACCOUNT: "111111111111"
+          CDK_DEFAULT_REGION: "us-east-1"
+        run: |
+          cdk synth --app "uv run python app.py" \
+            -c env=prod \
+            -c imageTag=latest \
+            --quiet
