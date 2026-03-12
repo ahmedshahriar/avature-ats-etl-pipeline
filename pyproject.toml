@@ -1,9 +1,9 @@
 [project]
 name = "avature-ats-etl-pipeline"
 version = "0.1.0"
-description = "Avature ATS ETL Pipeline for data extraction, transformation, and loading."
+description = "Scrapy ETL pipeliene with AWS CDK infrastructure for scraping Avature ATS job postings."
 authors = [
-    { name = "Ahmed Shahriar Sakib", email = "ahmed.shahriar.sakib@gmail.com" }
+    { name = "Ahmed Shahriar Sakib", email = "assakib@uwaterloo.ca" }
 ]
 requires-python = ">=3.13"
 # Core Scrapy runtime deps for local development.
