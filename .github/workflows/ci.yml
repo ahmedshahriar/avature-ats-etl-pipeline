@@ -37,7 +37,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Install dev dependencies
-        run: uv sync --group dev --group infra --group local
+        run: uv sync --frozen --group dev --group infra --group local
 
       - name: Run pre-commit (ruff + ty)
         run: uv run pre-commit run --all-files
@@ -63,7 +63,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
-        run: uv sync --only-group infra
+        run: uv sync --frozen --only-group infra
 
       - name: Run unit tests
         run: uv run pytest -v --tb=short
