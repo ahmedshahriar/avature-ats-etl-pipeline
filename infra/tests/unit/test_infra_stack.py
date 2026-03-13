@@ -5,7 +5,7 @@ Unit tests for infra stacks.
 
 import aws_cdk as cdk
 import pytest
-from aws_cdk.assertions import Match, Template
+from aws_cdk.assertions import Template
 from stacks.base_stack import AvatureEtlBaseStack
 from stacks.ecr_stack import AvatureEtlEcrStack
 from stacks.ecs_schedule_stack import AvatureEtlEcsScheduleStack
@@ -202,15 +202,19 @@ def test_runtime_alarm_stack_resources_created(app, aws_env):
 
     template = Template.from_stack(runtime_alarm_stack)
 
-    template.resource_count_is("AWS::CloudWatch::Alarm", 1)
+    template.resource_count_is("AWS::CloudWatch::Alarm", 2)
 
-    alarms = template.find_resources(
-        "AWS::CloudWatch::Alarm",
-        {
-            "Properties": {
-                "AlarmActions": [{"Fn::ImportValue": Match.any_value()}],
-                "OKActions": [{"Fn::ImportValue": Match.any_value()}],
-            }
-        },
-    )
-    assert len(alarms) == 1, "Expected alarm to have both AlarmActions and OKActions set"
+    alarms = template.find_resources("AWS::CloudWatch::Alarm")
+    alarm_properties = [resource["Properties"] for resource in alarms.values()]
+
+    run_failed_alarm = next(props for props in alarm_properties if props["AlarmName"] == "avature-etl-dev-run-failed")
+    assert run_failed_alarm["ComparisonOperator"] == "GreaterThanOrEqualToThreshold"
+    assert run_failed_alarm["Threshold"] == 1
+    assert len(run_failed_alarm["AlarmActions"]) == 1
+    assert len(run_failed_alarm["OKActions"]) == 1
+
+    empty_run_alarm = next(props for props in alarm_properties if props["AlarmName"] == "avature-etl-dev-empty-run")
+    assert empty_run_alarm["ComparisonOperator"] == "LessThanThreshold"
+    assert empty_run_alarm["Threshold"] == 1
+    assert len(empty_run_alarm["AlarmActions"]) == 1
+    assert "OKActions" not in empty_run_alarm
