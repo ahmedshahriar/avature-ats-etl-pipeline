@@ -41,3 +41,6 @@ scraper_runtime:
   ddb_dedupe_fail_open: false
   scrapy_feed_name: "jobs.jsonl"
   metrics_file: "metrics.json"
+  run_manifest_file: "run_manifest.json"
+  quarantine_file: "quarantine.jsonl"
+  portal_summary_file: "portal_summary.jsonl"

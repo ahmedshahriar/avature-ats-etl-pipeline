@@ -31,6 +31,9 @@ class ScraperRuntimeConfig:
 
     scrapy_feed_name: str
     metrics_file: str
+    run_manifest_file: str
+    quarantine_file: str
+    portal_summary_file: str
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "ScraperRuntimeConfig":
@@ -51,6 +54,9 @@ class ScraperRuntimeConfig:
             ddb_dedupe_fail_open=_as_bool(data["ddb_dedupe_fail_open"]),
             scrapy_feed_name=str(data["scrapy_feed_name"]),
             metrics_file=str(data["metrics_file"]),
+            run_manifest_file=str(data["run_manifest_file"]),
+            quarantine_file=str(data["quarantine_file"]),
+            portal_summary_file=str(data["portal_summary_file"]),
         )
 
     def to_env(self) -> dict[str, str]:
@@ -71,4 +77,7 @@ class ScraperRuntimeConfig:
             "DDB_DEDUPE_FAIL_OPEN": "1" if self.ddb_dedupe_fail_open else "0",
             "SCRAPY_FEED_NAME": self.scrapy_feed_name,
             "METRICS_FILE": self.metrics_file,
+            "RUN_MANIFEST_FILE": self.run_manifest_file,
+            "QUARANTINE_FILE": self.quarantine_file,
+            "PORTAL_SUMMARY_FILE": self.portal_summary_file,
         }
