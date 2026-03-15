@@ -15,6 +15,11 @@ schedule_minute: "0"
 schedule_timezone: "UTC"
 schedule_enabled: false
 
+# Optional: Enable Container Insights for better monitoring (note: may increase CloudWatch costs)
+container_insights_mode: "disabled"
+empty_run_threshold: 1
+job_detail_success_rate_threshold: 0.95
+
 tags:
   Owner: "ahmed"
   ManagedBy: "cdk"
@@ -41,3 +46,6 @@ scraper_runtime:
   ddb_dedupe_fail_open: false
   scrapy_feed_name: "jobs.jsonl"
   metrics_file: "metrics.json"
+  run_manifest_file: "run_manifest.json"
+  quarantine_file: "quarantine.jsonl"
+  portal_summary_file: "portal_summary.jsonl"

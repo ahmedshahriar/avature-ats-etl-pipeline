@@ -15,6 +15,8 @@ class AvatureEtlRuntimeAlarmStack(Stack):
         stage: str,
         topic: sns.ITopic,
         spider_name: str = "avature",
+        min_jobs_exported: int = 1,
+        min_job_detail_success_rate: float = 0.95,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -52,9 +54,9 @@ class AvatureEtlRuntimeAlarmStack(Stack):
         run_failed_alarm.add_alarm_action(cloudwatch_actions.SnsAction(topic))  # ty: ignore[invalid-argument-type]
         run_failed_alarm.add_ok_action(cloudwatch_actions.SnsAction(topic))  # ty: ignore[invalid-argument-type]
 
-        unique_jobs_metric = cloudwatch.Metric(
+        jobs_exported_metric = cloudwatch.Metric(
             namespace="AvatureETL",
-            metric_name="UniqueJobs",
+            metric_name="JobsExported",
             dimensions_map={
                 "Project": prefix,
                 "Stage": stage,
@@ -68,9 +70,9 @@ class AvatureEtlRuntimeAlarmStack(Stack):
             self,
             "EmptyRunAlarm",
             alarm_name=f"{prefix}-{stage}-empty-run",
-            alarm_description="Scraper completed but produced zero jobs in the last 24 hours.",
-            metric=unique_jobs_metric,
-            threshold=1,
+            alarm_description="Scraper completed but exported fewer jobs than expected in the last 24 hours.",
+            metric=jobs_exported_metric,
+            threshold=min_jobs_exported,
             evaluation_periods=1,
             datapoints_to_alarm=1,
             comparison_operator=cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
@@ -79,5 +81,33 @@ class AvatureEtlRuntimeAlarmStack(Stack):
 
         empty_run_alarm.add_alarm_action(cloudwatch_actions.SnsAction(topic))  # ty: ignore[invalid-argument-type]
 
+        job_detail_success_rate_metric = cloudwatch.Metric(
+            namespace="AvatureETL",
+            metric_name="JobDetailSuccessRate",
+            dimensions_map={
+                "Project": prefix,
+                "Stage": stage,
+                "Spider": spider_name,
+            },
+            statistic="Average",
+            period=Duration.hours(24),
+        )
+
+        low_success_rate_alarm = cloudwatch.Alarm(
+            self,
+            "LowJobDetailSuccessRateAlarm",
+            alarm_name=f"{prefix}-{stage}-low-job-detail-success-rate",
+            alarm_description="Scraper job-detail success rate fell below the expected threshold in the last 24 hours.",
+            metric=job_detail_success_rate_metric,
+            threshold=min_job_detail_success_rate,
+            evaluation_periods=1,
+            datapoints_to_alarm=1,
+            comparison_operator=cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+        )
+
+        low_success_rate_alarm.add_alarm_action(cloudwatch_actions.SnsAction(topic))  # ty: ignore[invalid-argument-type]
+
         CfnOutput(self, "RunFailedAlarmName", value=run_failed_alarm.alarm_name)
         CfnOutput(self, "EmptyRunAlarmName", value=empty_run_alarm.alarm_name)
+        CfnOutput(self, "LowJobDetailSuccessRateAlarmName", value=low_success_rate_alarm.alarm_name)

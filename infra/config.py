@@ -18,17 +18,23 @@ class AppConfig:
     bucket_suffix: str
     ddb_table_suffix: str
 
-    # New Operational Controls
+    # Operational Controls
     ecs_task_cpu: int
     ecs_task_memory: int
+    container_insights_mode: str
 
     # Optional alert email for ECS task failures; if not set, no alerts will be configured.
     alert_email: str | None
 
+    # scheduler config
     schedule_hour: str
     schedule_minute: str
     schedule_timezone: str
     schedule_enabled: bool
+
+    # Operational thresholds for monitoring and alerting
+    empty_run_threshold: int
+    job_detail_success_rate_threshold: float
 
     scraper_runtime: ScraperRuntimeConfig
 
@@ -62,13 +68,20 @@ class AppConfig:
             aws_region=os.getenv("AWS_REGION"),
             bucket_suffix=data["bucket_suffix"],
             ddb_table_suffix=data["ddb_table_suffix"],
+            # ecs
             ecs_task_cpu=int(data["ecs_task_cpu"]),
             ecs_task_memory=int(data["ecs_task_memory"]),
+            container_insights_mode=str(data.get("container_insights_mode", "disabled")).lower(),
+            # monitoring
             alert_email=(data.get("alert_email") or os.getenv("ALERT_EMAIL") or "").strip() or None,
             schedule_hour=str(data.get("schedule_hour", "9")),
             schedule_minute=str(data.get("schedule_minute", "0")),
             schedule_timezone=str(data.get("schedule_timezone", "UTC")),
             schedule_enabled=bool(data.get("schedule_enabled", env_name == "prod")),
+            # operational thresholds
+            empty_run_threshold=int(data.get("empty_run_threshold", 1)),
+            job_detail_success_rate_threshold=float(data.get("job_detail_success_rate_threshold", 0.95)),
+            # scraper runtime config
             scraper_runtime=ScraperRuntimeConfig.from_mapping(data["scraper_runtime"]),
             tags=tags,
         )

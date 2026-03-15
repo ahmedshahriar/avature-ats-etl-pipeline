@@ -68,9 +68,17 @@ class AvatureEtlBaseStack(Stack):
             removal_policy=bucket_removal,
         )
 
+        # Lifecycle rules
+        # No expiration rule on avature/bronze/jobs/
+        # Ops artifacts (e.g. logs, reports) can be short-lived
         self.outputs_bucket.add_lifecycle_rule(
-            prefix="avature/",
+            prefix="avature/ops/",
             expiration=Duration.days(90 if is_prod else 14),
+        )
+
+        self.outputs_bucket.add_lifecycle_rule(
+            prefix="avature/bronze/quarantine/",
+            expiration=Duration.days(180 if is_prod else 30),
         )
 
         # ---- DynamoDB (idempotency / dedupe across runs) ----
