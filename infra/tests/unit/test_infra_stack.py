@@ -79,6 +79,34 @@ def ecs_stack(app, aws_env, base_stack, ecr_stack):
     )
 
 
+@pytest.fixture
+def notifications_stack(app, aws_env, ecs_stack):
+    """Instantiates the Notifications Stack with its dependencies."""
+    return AvatureEtlNotificationsStack(
+        app,
+        "avature-etl-notifications",
+        prefix="avature-etl",
+        stage="dev",
+        scheduler_dlq=ecs_stack.dlq,
+        alert_email="alerts@example.com",
+        env=aws_env,
+    )
+
+
+@pytest.fixture
+def runtime_alarm_stack(app, aws_env, notifications_stack):
+    """Instantiates the Runtime Alarm Stack with its dependencies."""
+    return AvatureEtlRuntimeAlarmStack(
+        app,
+        "avature-etl-runtime-alarms",
+        prefix="avature-etl",
+        stage="dev",
+        topic=notifications_stack.topic,  # ty: ignore[invalid-argument-type]
+        spider_name="avature",
+        env=aws_env,
+    )
+
+
 # =============================================================================
 # Tests
 # =============================================================================
@@ -157,21 +185,7 @@ def test_schedule_stack_resources_created(ecs_stack):
     )
 
 
-def test_notifications_stack_resources_created(app, aws_env):
-    # Dummy stack to fulfill dependencies
-    dummy_stack = cdk.Stack(app, "dummy-queue-stack", env=aws_env)
-    dlq = cdk.aws_sqs.Queue(dummy_stack, "TestDlq")
-
-    notifications_stack = AvatureEtlNotificationsStack(
-        app,
-        "avature-etl-notifications-dev",
-        prefix="avature-etl",
-        stage="dev",
-        scheduler_dlq=dlq,
-        alert_email="alerts@example.com",
-        env=aws_env,
-    )
-
+def test_notifications_stack_resources_created(notifications_stack):
     template = Template.from_stack(notifications_stack)
 
     template.resource_count_is("AWS::SNS::Topic", 1)
@@ -185,24 +199,10 @@ def test_notifications_stack_resources_created(app, aws_env):
     )
 
 
-def test_runtime_alarm_stack_resources_created(app, aws_env):
-    # Dummy stack to fulfill dependencies
-    dummy_stack = cdk.Stack(app, "dummy-topic-stack", env=aws_env)
-    topic = cdk.aws_sns.Topic(dummy_stack, "TestTopic")
-
-    runtime_alarm_stack = AvatureEtlRuntimeAlarmStack(
-        app,
-        "avature-etl-runtime-alarms-dev",
-        prefix="avature-etl",
-        stage="dev",
-        topic=topic,  # ty: ignore[invalid-argument-type]
-        spider_name="avature",
-        env=aws_env,
-    )
-
+def test_runtime_alarm_stack_resources_created(runtime_alarm_stack):
     template = Template.from_stack(runtime_alarm_stack)
 
-    template.resource_count_is("AWS::CloudWatch::Alarm", 2)
+    template.resource_count_is("AWS::CloudWatch::Alarm", 3)
 
     alarms = template.find_resources("AWS::CloudWatch::Alarm")
     alarm_properties = [resource["Properties"] for resource in alarms.values()]
@@ -218,3 +218,11 @@ def test_runtime_alarm_stack_resources_created(app, aws_env):
     assert empty_run_alarm["Threshold"] == 1
     assert len(empty_run_alarm["AlarmActions"]) == 1
     assert "OKActions" not in empty_run_alarm
+
+    low_success_rate_alarm = next(
+        props for props in alarm_properties if props["AlarmName"] == "avature-etl-dev-low-job-detail-success-rate"
+    )
+    assert low_success_rate_alarm["ComparisonOperator"] == "LessThanThreshold"
+    assert low_success_rate_alarm["Threshold"] == 0.95
+    assert len(low_success_rate_alarm["AlarmActions"]) == 1
+    assert "OKActions" not in low_success_rate_alarm

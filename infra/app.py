@@ -55,13 +55,17 @@ ecs_stack = AvatureEtlEcsScheduleStack(
     prefix=cfg.project_name,
     stage=cfg.env_name,
     image_tag=image_tag,
+    # config
     ecs_task_cpu=cfg.ecs_task_cpu,
     ecs_task_memory=cfg.ecs_task_memory,
+    container_insights_mode=cfg.container_insights_mode,
+    # feed
     outputs_bucket=base_stack.outputs_bucket,
     seen_jobs_table=base_stack.seen_jobs_table,
     ecs_log_group=base_stack.ecs_log_group,
     repository=ecr_stack.repository,
     scraper_runtime_env=cfg.scraper_runtime.to_env(),
+    # schedule
     schedule_hour=cfg.schedule_hour,
     schedule_minute=cfg.schedule_minute,
     schedule_timezone=cfg.schedule_timezone,
@@ -86,6 +90,8 @@ runtime_alarm_stack = AvatureEtlRuntimeAlarmStack(
     stage=cfg.env_name,
     topic=notifications_stack.topic,  # ty: ignore[invalid-argument-type]
     spider_name="avature",
+    min_jobs_exported=cfg.empty_run_threshold,
+    min_job_detail_success_rate=cfg.job_detail_success_rate_threshold,
     env=aws_env,
 )
 

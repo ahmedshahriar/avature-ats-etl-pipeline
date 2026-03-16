@@ -20,8 +20,6 @@ ENV_NAME = os.getenv("ENV_NAME", "dev")
 SPIDER_MODULES = ["core.spiders"]
 NEWSPIDER_MODULE = "core.spiders"
 
-ADDONS = {}
-
 # -----------------------------------------------------------------------------
 # Dynamic Run Routing (Local vs AWS)
 # -----------------------------------------------------------------------------
@@ -29,16 +27,17 @@ ADDONS = {}
 DEPLOY_ENV = os.getenv("DEPLOY_ENV", "local").lower()
 
 now_utc = datetime.now(UTC)
-DATE_STR = now_utc.strftime("%Y-%m-%d")
-TS_STR = now_utc.strftime("%Y%m%d_%H%M%S")
-
-# AWS: run_id is DATE, Local: run_id is timestamped by default
-RUN_ID = os.getenv("RUN_ID") or (DATE_STR if DEPLOY_ENV == "aws" else TS_STR)
+RUN_DATE = os.getenv("RUN_DATE", now_utc.strftime("%Y-%m-%d"))
+RUN_TS = os.getenv("RUN_TS", now_utc.strftime("%Y%m%dT%H%M%SZ"))
+RUN_ID = os.getenv("RUN_ID") or RUN_TS
 
 # Where logs/metrics should go locally (AWS uses stdout logs, and uploads metrics to S3)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_RUN_DIR = Path(os.getenv("RUN_DIR", str(PROJECT_ROOT / "output" / f"run_{RUN_ID}")))
+SEED_URLS_FILE = os.getenv("SEED_URLS_FILE", "seed_urls.csv")
 
+IMAGE_TAG = os.getenv("IMAGE_TAG", "")
+GIT_SHA = os.getenv("GIT_SHA", "")
 
 # -----------------------------------------------------------------------------
 # Logging + stats
@@ -92,7 +91,7 @@ AUTOTHROTTLE_DEBUG = False
 # Default headers / UA
 # -----------------------------------------------------------------------------
 
-USER_AGENTS = (
+USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 )
@@ -101,11 +100,6 @@ USER_AGENTS = (
 DEFAULT_REQUEST_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
-    "DNT": "1",
-    "Upgrade-Insecure-Requests": "1",
 }
 
 # Obey robots.txt rules
@@ -140,11 +134,17 @@ else:
 # FEEDS routing (Local file vs S3)
 # -----------------------------------------------------------------------------
 SCRAPY_FEED_NAME = os.getenv("SCRAPY_FEED_NAME", "jobs.jsonl")
+METRICS_FILE = os.getenv("METRICS_FILE", "metrics.json")
+RUN_MANIFEST_FILE = os.getenv("RUN_MANIFEST_FILE", "run_manifest.json")
+QUARANTINE_FILE = os.getenv("QUARANTINE_FILE", "quarantine.jsonl")
+PORTAL_SUMMARY_FILE = os.getenv("PORTAL_SUMMARY_FILE", "portal_summary.jsonl")
+
+DATASET_ROOT = os.getenv("DATASET_ROOT", "avature")
+BRONZE_ROOT = os.getenv("BRONZE_ROOT", f"{DATASET_ROOT}/bronze")
+OPS_ROOT = os.getenv("OPS_ROOT", f"{DATASET_ROOT}/ops")
 
 FEED_EXPORT_ENCODING = "utf-8"
 FEED_STORE_EMPTY = False
-
-METRICS_FILE = os.getenv("METRICS_FILE", "metrics.json")
 
 if DEPLOY_ENV == "aws":
     # Required in ECS task env
@@ -153,11 +153,21 @@ if DEPLOY_ENV == "aws":
     if not S3_BUCKET_NAME:
         raise RuntimeError("S3_BUCKET_NAME must be set when DEPLOY_ENV=aws")
 
-    # Example: avature/dt=2026-03-05/jobs.jsonl
-    S3_OUTPUT_PREFIX = os.getenv("S3_OUTPUT_PREFIX", f"avature/dt={RUN_ID}")
+    BRONZE_JOBS_PREFIX = os.getenv("BRONZE_JOBS_PREFIX", f"{BRONZE_ROOT}/jobs/run_date={RUN_DATE}/run_id={RUN_ID}")
+    BRONZE_QUARANTINE_PREFIX = os.getenv(
+        "BRONZE_QUARANTINE_PREFIX",
+        f"{BRONZE_ROOT}/quarantine/run_date={RUN_DATE}/run_id={RUN_ID}",
+    )
+    OPS_RUN_PREFIX = os.getenv("OPS_RUN_PREFIX", f"{OPS_ROOT}/runs/run_date={RUN_DATE}/run_id={RUN_ID}")
+    OPS_PORTAL_PREFIX = os.getenv(
+        "OPS_PORTAL_PREFIX", f"{OPS_ROOT}/portal_summaries/run_date={RUN_DATE}/run_id={RUN_ID}"
+    )
 
-    JOBS_FEED_URI = f"s3://{S3_BUCKET_NAME}/{S3_OUTPUT_PREFIX}/{SCRAPY_FEED_NAME}"
-    METRICS_S3_URI = f"s3://{S3_BUCKET_NAME}/{S3_OUTPUT_PREFIX}/{METRICS_FILE}"
+    JOBS_FEED_URI = f"s3://{S3_BUCKET_NAME}/{BRONZE_JOBS_PREFIX}/{SCRAPY_FEED_NAME}"
+    METRICS_S3_URI = f"s3://{S3_BUCKET_NAME}/{OPS_RUN_PREFIX}/{METRICS_FILE}"
+    RUN_MANIFEST_S3_URI = f"s3://{S3_BUCKET_NAME}/{OPS_RUN_PREFIX}/{RUN_MANIFEST_FILE}"
+    QUARANTINE_S3_URI = f"s3://{S3_BUCKET_NAME}/{BRONZE_QUARANTINE_PREFIX}/{QUARANTINE_FILE}"
+    PORTAL_SUMMARY_S3_URI = f"s3://{S3_BUCKET_NAME}/{OPS_PORTAL_PREFIX}/{PORTAL_SUMMARY_FILE}"
 
     JOBDIR = None
     SCHEDULER_PERSIST = False
@@ -171,16 +181,18 @@ if DEPLOY_ENV == "aws":
 
     # Run DynamoDB deduplication FIRST, then standard metrics pipeline
     ITEM_PIPELINES = {
-        "core.pipelines.DynamoDBDedupePipeline": 100,
+        "core.pipelines.ValidationPipeline": 100,
+        "core.pipelines.DynamoDBDedupePipeline": 200,
         "core.pipelines.JobPipeline": 300,
     }
-
-    # Disable periodic extension in AWS for now
-    EXTENSIONS = {"core.extensions.StatsDumpExtension": None}
+    EXTENSIONS = {"core.extensions.CrawlMetricsExtension": 500}
 else:
     # Local run directory output
     JOBS_FEED_URI = str(LOCAL_RUN_DIR / SCRAPY_FEED_NAME)
     METRICS_S3_URI = None
+    RUN_MANIFEST_S3_URI = None
+    QUARANTINE_S3_URI = None
+    PORTAL_SUMMARY_S3_URI = None
 
     # Scrapy's JOBDIR persists the scheduler + dupefilter fingerprints.
     # This enables resuming after crash/kill without re-requesting the same pages.
@@ -192,12 +204,16 @@ else:
     # Configure item pipelines
     # See https://docs.scrapy.org/en/latest/topics/item-pipeline.html
     ITEM_PIPELINES = {
+        "core.pipelines.ValidationPipeline": 100,
         "core.pipelines.JobPipeline": 300,
     }
+    EXTENSIONS = {"core.extensions.CrawlMetricsExtension": 500}
 
-    EXTENSIONS = {"core.extensions.StatsDumpExtension": 500}
-    METRICS_DUMP_PATH = str(LOCAL_RUN_DIR / METRICS_FILE)
-    METRICS_DUMP_INTERVAL = int(os.getenv("METRICS_DUMP_INTERVAL", "30"))
+METRICS_DUMP_PATH = str(LOCAL_RUN_DIR / METRICS_FILE)
+RUN_MANIFEST_LOCAL_PATH = str(LOCAL_RUN_DIR / RUN_MANIFEST_FILE)
+QUARANTINE_LOCAL_PATH = str(LOCAL_RUN_DIR / QUARANTINE_FILE)
+PORTAL_SUMMARY_LOCAL_PATH = str(LOCAL_RUN_DIR / PORTAL_SUMMARY_FILE)
+METRICS_DUMP_INTERVAL = int(os.getenv("METRICS_DUMP_INTERVAL", "30" if DEPLOY_ENV != "aws" else "0"))
 
 # IMPORTANT:
 # - S3 does not support append, so overwrite must be True for s3:// feeds.

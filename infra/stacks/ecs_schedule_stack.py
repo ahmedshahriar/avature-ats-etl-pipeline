@@ -28,6 +28,7 @@ class AvatureEtlEcsScheduleStack(Stack):
         ecs_log_group: logs.ILogGroup,
         repository: ecr.IRepository,
         scraper_runtime_env: dict[str, str],
+        container_insights_mode: str = "disabled",
         schedule_minute: str = "0",
         schedule_hour: str = "9",
         schedule_timezone: str = "UTC",
@@ -43,14 +44,25 @@ class AvatureEtlEcsScheduleStack(Stack):
         vpc = ec2.Vpc.from_lookup(self, "DefaultVpc", is_default=True)
 
         # ECS Cluster
+        container_insights_mode = (container_insights_mode or "disabled").lower()
+        container_insights_lookup = {
+            "disabled": ecs.ContainerInsights.DISABLED,
+            "enabled": ecs.ContainerInsights.ENABLED,
+            "enhanced": ecs.ContainerInsights.ENHANCED,
+        }
+        if container_insights_mode not in container_insights_lookup:
+            raise ValueError("container_insights_mode must be one of: disabled, enabled, enhanced")
+
         cluster = ecs.Cluster(
             self,
             "Cluster",
             cluster_name=f"{prefix}-{stage}-cluster",
             vpc=vpc,
+            # disabled for now as it will
+            # https://docs.aws.amazon.com/AmazonECS/latest/developerguide/cloudwatch-container-insights.html
             # either use ENHANCED or ENABLED for optimal performance and features.
             # ENHANCED is newer and recommended if supported.
-            container_insights_v2=ecs.ContainerInsights.ENABLED if is_prod else ecs.ContainerInsights.DISABLED,
+            container_insights_v2=container_insights_lookup[container_insights_mode],
         )
 
         # Security Group for one-off/scheduled batch runs
