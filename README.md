@@ -1,14 +1,19 @@
 # Avature ATS ETL Pipeline
 
-A Scrapy-based end-to-end ETL pipeline for crawling **Avature career portals** (job listings → job details), exports job listings.
+<p align="center"><a href="https://github.com/ahmedshahriar/avature-ats-etl-pipeline/actions/workflows/ci.yml"><img align="absmiddle" alt="CI" src="https://github.com/ahmedshahriar/avature-ats-etl-pipeline/actions/workflows/ci.yml/badge.svg"></a> <a href="https://github.com/ahmedshahriar/avature-ats-etl-pipeline/actions/workflows/cd.yml"><img align="absmiddle" alt="CD" src="https://github.com/ahmedshahriar/avature-ats-etl-pipeline/actions/workflows/cd.yml/badge.svg"></a> <a href="https://docs.astral.sh/ruff/"><img align="absmiddle" alt="Code Style: Ruff" src="https://img.shields.io/badge/Code%20Style-Ruff-46A3FF?logo=ruff&logoColor=white"></a> <a href="LICENSE"><img align="absmiddle" alt="License: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-green.svg"></a></p>
+
+<p align="center"><img align="absmiddle" alt="Python 3.13" src="https://img.shields.io/badge/Python-3.13-blue?logo=python&logoColor=white"> <a href="https://scrapy.org/"><img align="absmiddle" alt="Scrapy" src="https://img.shields.io/badge/Crawler-Scrapy-60A839?logo=scrapy&logoColor=white"></a> <a href="https://aws.amazon.com/cdk/"><img align="absmiddle" alt="AWS CDK" src="https://img.shields.io/badge/IaC-AWS%20CDK-FF9900?logo=amazonaws&logoColor=white"></a></p>
+
+A Scrapy-based end-to-end ETL pipeline for crawling Avature career portals (job listings → job details) and exporting job listings.
 
 Engineered for reliable cloud execution, this project features:
 
 - **Infrastructure as Code (IaC)** provisioning managed entirely via AWS CDK
 - **Scheduled serverless execution** using EventBridge to trigger ECS Fargate tasks
-- **Scalable data lake storage** streaming scraped payloads and metrics summaries directly to S3
+- **Scalable data lake storage** writing scraped payloads and metrics summaries directly to S3
 - **Cross-run idempotency & deduplication** powered by DynamoDB
-- **Operational observability** with CloudWatch logging, metric alarms, and SNS alerts for failed tasks/runs
+- **Data quality controls** with validation, warnings, and quarantine for invalid records
+- **Operational observability** with CloudWatch logging, EMF metrics and alarms, SNS alerts for failed tasks/runs
 - **Fault tolerance** using SQS Dead Letter Queue (DLQ) for failed invocations
 - **Automated CI/CD** using GitHub Actions with secure AWS OIDC integration
 
@@ -16,13 +21,15 @@ Engineered for reliable cloud execution, this project features:
 
 ## What it extracts
 
-From each Avature job detail page, the spider extracts:
+From each Avature job detail page, the spider extracts the core job record plus lineage and validation metadata.
 
-- **Job Title**
-- **Job Description** (clean text; derived from Avature sections)
-- **Application URL**
+### Core fields
 
-And metadata when available:
+- **Job Title (`title`)**
+- **Job Description (`description_text`)** (clean text; derived from Avature sections)
+- **Application URL (`apply_url`)**
+
+### Metadata when available
 
 - `locations`
 - `posted_date`
@@ -31,9 +38,29 @@ And metadata when available:
 - `employment_type`
 - `remote`
 - `ref_number`
-- `source_url`
 - `job_id`
-- `job_hash` — stable unique job key
+
+
+### Lineage and identity fields
+
+- `source_url` — canonical detail URL used as the stable item URL
+- `canonical_source_url` — normalized detail URL used for stable identity
+- `raw_source_url` — raw URL returned by the site before canonicalization
+- `portal_key` — stable portal identifier such as `ally.avature.net/careers`
+- `input_seed_url` — the listing URL from `seed_urls.csv` that led to the crawl
+- `run_id` — unique execution identifier
+- `scraped_at` — UTC timestamp when the item was produced
+- `job_hash` — stable unique job key derived from portal identity and job identity
+
+### Validation fields
+
+- `validation_errors`
+- `validation_warnings`
+- `record_status` — `valid` or `quarantined`
+
+### Raw extraction fallback
+
+- `raw_fields` — raw label/value pairs captured from the page for audit/debugging
 
 ---
 
@@ -47,6 +74,9 @@ Each run creates a unique output directory:
 output/run_<RUN_ID>/
   jobs.jsonl
   metrics.json
+  run_manifest.json
+  portal_summary.jsonl
+  quarantine.jsonl
   scrapy.log
 ```
 
@@ -55,33 +85,86 @@ output/run_<RUN_ID>/
 When deployed on AWS, outputs are written to S3:
 
 ```text
-s3://<S3_OUTPUT_BUCKET>/avature/dt=<YYYY-MM-DD>/
-  jobs.jsonl
-  metrics.json
+s3://<S3_BUCKET_NAME>/avature/bronze/jobs/run_date=<YYYY-MM-DD>/run_id=<RUN_ID>/jobs.jsonl
+s3://<S3_BUCKET_NAME>/avature/bronze/quarantine/run_date=<YYYY-MM-DD>/run_id=<RUN_ID>/quarantine.jsonl
+s3://<S3_BUCKET_NAME>/avature/ops/runs/run_date=<YYYY-MM-DD>/run_id=<RUN_ID>/metrics.json
+s3://<S3_BUCKET_NAME>/avature/ops/runs/run_date=<YYYY-MM-DD>/run_id=<RUN_ID>/run_manifest.json
+s3://<S3_BUCKET_NAME>/avature/ops/portal_summaries/run_date=<YYYY-MM-DD>/run_id=<RUN_ID>/portal_summary.jsonl
 ```
+
+### Artifact roles
+
+- `jobs.jsonl` — exported valid job records
+- `metrics.json` — full Scrapy stats snapshot plus custom crawl/pipeline metrics
+- `run_manifest.json` — run lineage summary, counts, timestamps, input fingerprint, and artifact URIs
+- `portal_summary.jsonl` — portal-level crawl breakdowns and completeness metrics
+- `quarantine.jsonl` — invalid records that failed hard validation checks
 
 ---
 
 ## Metrics
 
-Primary metric:
+### Primary coverage metric
 
-* **Coverage** = number of unique jobs scraped, measured by `job_hash`
+- **Coverage** = number of exported unique jobs, measured by stable `job_hash`
 
-Other metrics include:
+### Crawl funnel metrics
 
-* duplicates dropped (local run dedupe or AWS DynamoDB dedupe)
-* completeness counters (jobs with description/locations/posted_date/apply_url)
-* response status counts (200/404/429/5xx)
-* request/response totals, exceptions, runtime
+- `crawl/jobs_discovered_total`
+- `crawl/job_detail_requests_total`
+- `item_scraped_count` / `pipeline/jobs_exported_total`
+- `pipeline/jobs_quarantined_total`
+- `pipeline/duplicates_dropped_total`
+- `pipeline/dynamodb_duplicates_dropped`
 
-`metrics.json` is a **combined** stats snapshot that includes Scrapy stats and pipeline summary.
+### Quality and observability metrics
+
+- `crawl/job_detail_success_rate`
+- `crawl/job_detail_parse_exception_total`
+- `crawl/job_detail_parse_failure_total` (funnel-loss approximation)
+- per-field completeness percentages from the pipeline
+- request/response counts by request kind (`listing`, `pagination`, `job_detail`)
+- response buckets by request kind (`2xx`, `3xx`, `4xx`, `5xx`)
+
+### Artifact notes
+
+- `metrics.json` is the full run-level stats snapshot
+- `portal_summary.jsonl` contains high-cardinality portal-level breakdowns for downstream analysis
+- CloudWatch EMF intentionally stays **low-cardinality** to control cost
 
 ---
+
+## Validation and quarantine flow
+
+Each item passes through a validation stage before it is accepted as a final exported record.
+
+### Validation behavior
+
+- required fields such as `title`, `description_text`, and stable identity fields are checked
+- fields such as `posted_date`, `remote`, and `locations` are normalized
+- missing non-critical fields produce `validation_warnings`
+- missing critical fields produce `validation_errors`
+
+### Outcome rules
+
+- records with only warnings remain `record_status = "valid"` and are exported to `jobs.jsonl`
+- records with hard validation failures are marked `record_status = "quarantined"`, written to `quarantine.jsonl`, and dropped from the final exported dataset
+
+This gives the pipeline a clean separation between:
+- **valid exported records**
+- **invalid quarantined records**
+
 
 ## Architecture
 
 <img width="3959" height="1218" alt="diagram" src="https://github.com/user-attachments/assets/1077e404-408b-4cf9-b148-d493681fc6e6" />
+
+Scraper-side ownership is intentionally split as follows:
+
+- **Spider** — extraction, canonical URL handling, `portal_key`, and request classification
+- **ValidationPipeline** — normalization, warnings/errors, and quarantine
+- **JobPipeline** — exported-item metrics, EMF emission, and `run_manifest.json`
+- **CrawlMetricsExtension** — crawl telemetry, `metrics.json`, and `portal_summary.jsonl`
 
 ---
 
@@ -90,9 +173,9 @@ Other metrics include:
 ```text
 .
 ├── scrapy.cfg
-├── input_urls.csv          # REQUIRED: List of Avature portal URLs to scrape
+├── seed_urls.csv          # REQUIRED: List of Avature portal URLs to scrape
 ├── requirements.txt
-├── pyproject.toml          # Project config, dependencies (uv), and QA (ruff)
+├── pyproject.toml          # Project config, dependencies (uv), and QA (ruff, ty, pre-commit)
 ├── Dockerfile
 ├── core/                   # Scrapy spider and pipeline logic
 │   ├── items.py
@@ -110,7 +193,7 @@ Other metrics include:
 │   ├── app.py              # Main CDK app entry point
 │   └── bootstrap_app.py    # CDK app for GitHub OIDC bootstrap stack
 └── output/
-    └── run_<RUN_ID>/...
+    └── run_<RUN_ID>/...    # job exports, metrics, and logs for each run
 
 ```
 
@@ -150,9 +233,9 @@ pip install -r requirements.txt
 
 ### 3. Configure target URLs
 
-The spider reads listing page URLs from a root-level `input_urls.csv`.
+The spider reads listing page URLs from a root-level `seed_urls.csv` (a sample file is included in the repository).
 
-Create an `input_urls.csv` file in the repository root. Add the target Avature career portal listing URLs (one per line). The spider will dynamically set its `allowed_domains` based on this file.
+Add the target Avature career portal listing URLs (one per line) to `seed_urls.csv`. The spider derives its allowed domains from the URLs in this file.
 
 Example (One URL per line):
 
@@ -162,7 +245,7 @@ https://another-company.avature.net/en_US/careers/SearchJobs
 ```
 
 
-### 4. Create environment configuration file:
+### 4. Create environment configuration:
 
 Copy the environment example file:
 
@@ -200,8 +283,16 @@ scrapy crawl avature
 
 ```bash
 ls -la output/
-ls -la output/run_*/ # latest run directory
+ls -td output/run_* | head -1 # latest run directory
 ```
+
+A healthy run usually shows:
+
+- `jobs.jsonl` populated with valid records
+- `metrics.json` containing both Scrapy stats and custom crawl/pipeline stats
+- `run_manifest.json` summarizing run lineage and artifact paths
+- `portal_summary.jsonl` with one row per scraped portal
+- `quarantine.jsonl` either empty or containing only invalid records that failed hard validation
 
 ---
 
@@ -215,12 +306,12 @@ Build locally:
 docker build -t avature-etl:local .
 ```
 
-Run with explicit local mounts (`input_urls.csv`, `.env`, and `output/`):
+Run with explicit local mounts (`seed_urls.csv`, `.env`, and `output/`):
 
 ```bash
 docker run --rm \
   --env-file .env \
-  -v "$(pwd)/input_urls.csv:/app/input_urls.csv:ro" \
+  -v "$(pwd)/seed_urls.csv:/app/seed_urls.csv:ro" \
   -v "$(pwd)/output:/app/output" \
   avature-etl:local
 ```
@@ -257,11 +348,14 @@ At deploy time, these values are injected into the ECS task and supporting AWS r
 
 ### Manual AWS setup
 
-If you want to deploy this project directly from your machine, you only need:
+If you want to deploy this project directly from your machine, make sure you have the following available locally:
 
 - an AWS account and credentials with sufficient permissions to deploy CDK stacks and manage ECR, ECS, S3, DynamoDB, and related resources
 - a bootstrapped CDK environment
 - the `infra/` dependencies installed
+- Docker with `buildx` support
+- the AWS CLI configured for the target account/region
+- the AWS CDK CLI installed
 
 Install the infrastructure dependencies:
 
@@ -419,7 +513,12 @@ This ensures that the exact same tested artifact is promoted to production, foll
 
 **Why**: Scrapy’s in-memory/JobDir dedupe only prevents duplicates *within a run*. DynamoDB provides **cross-run idempotency**.
 
-Each scraped job gets a stable `job_hash`. Before a record is accepted, the pipeline performs a conditional write to DynamoDB. If that hash already exists, the item is treated as already seen and dropped.
+This project adds a DynamoDB deduplication layer for AWS runs:
+
+- each job gets a stable `job_hash`
+- the pipeline performs a conditional write to DynamoDB before accepting the item
+- if the hash already exists, the item is treated as already seen and dropped
+- TTL is used so the dedupe table does not grow forever
 
 ### Operational notes
 
@@ -431,10 +530,38 @@ Each scraped job gets a stable `job_hash`. Before a record is accepted, the pipe
 
 ### S3 output
 
+#### S3 job export
+
 <details>
 <summary>Shows Hive-partitioned outputs generated by the ECS task</summary>
 
 ![S3 Output](assets/s3-lake-jobs.png)
+
+</details>
+
+#### S3 ops artifacts
+
+<details>
+<summary>Shows run-level artifacts such as metrics and run manifest</summary>
+
+![S3 Ops Artifacts](assets/s3-lake-ops.png)
+
+</details>
+
+
+<details>
+<summary>Shows portal summary artifacts with portal-level breakdowns and completeness metrics</summary>
+
+![S3 Portal Summary](assets/s3-lake-portal-summaries.png)
+
+</details>
+
+#### S3 quarantine artifact
+
+<details>
+<summary>Shows quarantined records that failed validation checks</summary>
+
+![S3 Quarantine](assets/s3-lake-quarantine.png)
 
 </details>
 
@@ -453,5 +580,14 @@ Each scraped job gets a stable `job_hash`. Before a record is accepted, the pipe
 <summary>Shows structured logs and emitted metrics from the ECS task</summary>
 
 ![CloudWatch Logs](assets/cloudwatch-logs.png)
+
+</details>
+
+#### CloudWatch Alarms
+
+<details>
+<summary>Shows example alarms for failed scheduler invocations and runtime errors</summary>
+
+![CloudWatch Alarms](assets/cloudwatch-alarms.png)
 
 </details>
