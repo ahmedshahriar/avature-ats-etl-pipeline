@@ -203,7 +203,7 @@ class AvatureSpider(scrapy.Spider):
                 if attr:
                     if attr == "locations":
                         # split on comma or slash
-                        parts = [p.strip() for p in re.split(r",|/|\n", value_text) if p.strip()]
+                        parts = [p.strip() for p in re.split(r"[,/\n]", value_text) if p.strip()]
                         locations.extend(parts)
                     else:
                         item[attr] = value_text
@@ -339,7 +339,7 @@ class AvatureSpider(scrapy.Spider):
         parsed = urlparse(url)
         clean_path = re.sub(r"/+", "/", parsed.path)
         clean = parsed._replace(query="", fragment="", path=clean_path)
-        return urlunparse(clean)
+        return str(urlunparse(clean))
 
     @staticmethod
     def _portal_key_from_url(url: str) -> str:

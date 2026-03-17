@@ -25,7 +25,6 @@ local = [
 infra = [
     "aws-cdk-lib>=2.241.0",
     "constructs>=10.5.1",
-    "python-dotenv>=1.2.2",
     "pytest>=9.0.2",
     "pyyaml>=6.0.3",
 ]
