@@ -36,12 +36,42 @@ class AvatureSpider(scrapy.Spider):
         "remote": "remote",
         "working time": "employment_type",
         "job type": "employment_type",
+        # posted_date
         "posted date": "posted_date",
+        "date posted": "posted_date",
+        "date": "posted_date",
+        "open date": "posted_date",
+        "opening date": "posted_date",
+        "publication date": "posted_date",
+        "publish date": "posted_date",
+        "requisition date": "posted_date",
+        "job posting date": "posted_date",
         "posted": "posted_date",
+        # company — additional Avature variants
+        "organization": "company",
+        "organisation": "company",
+        "employer": "company",
+        "business": "company",
+        "division": "company",
+        "brand": "company",
+        "entity": "company",
+        "legal entity": "company",
+        "hiring company": "company",
+        "hiring organization": "company",
+        "hiring organisation": "company",
+        # apply_url
+        "apply": "apply_url",
         "career area (you may select more than one)": "career_area",
         "state": "locations",
         "city": "locations",
+        # exception
+        "state/province/city": "locations",
+        "business unit": "career_area",
+        "time type": "employment_type",
+        "workplace arrangement": "remote",
     }
+
+    _EXCLUDED_PATH_SEGMENTS: frozenset[str] = frozenset({"internalcareers", "internalcareer"})
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -79,6 +109,9 @@ class AvatureSpider(scrapy.Spider):
 
     def parse_listing(self, response):
         """Parse a listing page and schedule requests for each job link and the next page."""
+        if not hasattr(response, "text"):
+            self.logger.warning("Non-text response at listing URL %s, skipping", response.url)
+            return
         soup = BeautifulSoup(response.text, "lxml")
         current_url = response.url
 
@@ -92,6 +125,9 @@ class AvatureSpider(scrapy.Spider):
 
             resolved = self._unwrap_job_href(str(href))
             job_url = urljoin(current_url, resolved)
+            # Guard: skip non-http URLs (mailto:, javascript:, etc.)
+            if not job_url.startswith(("http://", "https://")):
+                continue
             canonical_job_url = self._canonicalize_detail_url(job_url)
 
             if canonical_job_url in seen_on_page:
@@ -130,6 +166,9 @@ class AvatureSpider(scrapy.Spider):
 
     def parse_job(self, response):
         """Parse a job detail page into a JobItem."""
+        if not hasattr(response, "text"):
+            self.logger.warning("Non-text response at job URL %s, skipping", response.url)
+            return
         soup = BeautifulSoup(response.text, "lxml")
         item = AvatureJobItem()
 
@@ -289,6 +328,24 @@ class AvatureSpider(scrapy.Spider):
         return project_root / configured
 
     @staticmethod
+    def _is_excluded_url(url: str) -> bool:
+        """Return True if the URL matches a non-production path pattern."""
+        try:
+            parsed = urlparse(url)
+            # Check subdomain prefix
+            host = (parsed.hostname or "").lower()
+            subdomain = host.split(".")[0]
+            if subdomain in AvatureSpider._EXCLUDED_PATH_SEGMENTS:
+                return True
+            # Check each path segment
+            path_parts = {p.lower() for p in parsed.path.split("/") if p}
+            if path_parts & AvatureSpider._EXCLUDED_PATH_SEGMENTS:
+                return True
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
     def _read_seed_urls(seed_path: Path) -> list[str]:
         urls: list[str] = []
         with seed_path.open(newline="", encoding="utf-8") as f:
@@ -300,8 +357,12 @@ class AvatureSpider(scrapy.Spider):
                         (k for k in row if k.strip().lower() in {"url", "seed_url"}),
                         None,
                     ) or next(iter(row))  # fallback: first column
-                raw = row.get(url_field, "").strip()
+                raw = row.get(url_field, "").strip().rstrip(",").strip()
                 if not raw or raw.startswith("#"):
+                    continue
+                if not raw.startswith(("http://", "https://")):
+                    continue
+                if AvatureSpider._is_excluded_url(raw):
                     continue
                 urls.append(raw)
         return urls

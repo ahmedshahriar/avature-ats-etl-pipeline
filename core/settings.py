@@ -96,19 +96,12 @@ REDIRECT_MAX_TIMES = int(os.getenv("REDIRECT_MAX_TIMES", "3"))
 # -----------------------------------------------------------------------------
 
 UA_POOL = [
-    # Chrome on macOS
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
-    # Chrome on Windows
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
-    # Chrome on Linux
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-    # Edge on Windows
+    "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36 Edg/136.0.0.0",
-    # Safari on macOS
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 "
-    "(KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+    "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36 Edg/145.0.0.0",
 ]
 
 USER_AGENT = choice(UA_POOL)  # per-process baseline
@@ -121,7 +114,13 @@ DEFAULT_REQUEST_HEADERS = {
         "application/signed-exchange;v=b3;q=0.7"
     ),
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Encoding": "gzip, deflate, br, zstd",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Priority": "u=0, i",
+    "Sec-CH-UA": '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": '"macOS"',
     "Sec-Fetch-Dest": "document",
     "Sec-Fetch-Mode": "navigate",
     "Sec-Fetch-Site": "none",
@@ -142,7 +141,8 @@ REDIRECT_ENABLED = True
 # -----------------------------------------------------------------------------
 RETRY_ENABLED = True
 RETRY_TIMES = int(os.getenv("RETRY_TIMES", "4"))
-RETRY_HTTP_CODES = [408, 429, 500, 502, 503, 504, 522, 524]
+# https://docs.scrapy.org/en/latest/topics/downloader-middleware.html#retry-exceptions
+RETRY_HTTP_CODES = [406, 408, 429, 500, 502, 503, 504, 522, 524]
 
 
 # See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html#httpcache-middleware-settings
