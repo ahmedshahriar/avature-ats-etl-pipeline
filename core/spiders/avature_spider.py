@@ -6,7 +6,7 @@ import json
 import re
 import urllib.parse
 from pathlib import Path
-from urllib.parse import unquote, urljoin, urlparse, urlunparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse, urlunparse
 
 import scrapy
 from bs4 import BeautifulSoup
@@ -110,7 +110,7 @@ class AvatureSpider(scrapy.Spider):
                 link,
                 callback=self.parse_job,
                 meta={
-                    "portal_key": response.meta.get("portal_key", self._portal_key_from_url(link)),
+                    "portal_key": response.meta.get("portal_key") or self._portal_key_from_url(link),
                     "input_seed_url": response.meta.get("input_seed_url"),
                     "request_kind": "job_detail",
                 },
@@ -122,7 +122,7 @@ class AvatureSpider(scrapy.Spider):
                 next_link,
                 callback=self.parse_listing,
                 meta={
-                    "portal_key": response.meta.get("portal_key", self._portal_key_from_url(next_link)),
+                    "portal_key": response.meta.get("portal_key") or self._portal_key_from_url(link),
                     "input_seed_url": response.meta.get("input_seed_url"),
                     "request_kind": "pagination",
                 },
@@ -142,6 +142,7 @@ class AvatureSpider(scrapy.Spider):
         item["portal_key"] = response.meta.get("portal_key") or self._portal_key_from_url(canonical_source_url)
         item["input_seed_url"] = response.meta.get("input_seed_url")
         item["run_id"] = self.settings.get("RUN_ID")
+        item["run_date"] = self.settings.get("RUN_DATE")
         item["scraped_at"] = self._iso_now()
 
         meta = soup.find("meta", attrs={"name": "avature.portallist.search"})
@@ -151,9 +152,6 @@ class AvatureSpider(scrapy.Spider):
             match = re.search(r"/([0-9]{3,})(?:[/?#]|$)", canonical_source_url)
             if match:
                 item["job_id"] = match.group(1)
-
-        identity = f"{item['portal_key']}|{item.get('job_id') or canonical_source_url}".encode()
-        item["job_hash"] = hashlib.sha256(identity).hexdigest()
 
         # title
         title = None
@@ -262,6 +260,8 @@ class AvatureSpider(scrapy.Spider):
                     item["company"] = txt
         # raw fields
         item["raw_fields"] = raw_fields
+        identity = f"{item['portal_key']}|{item.get('job_id') or canonical_source_url}".encode()
+        item["job_hash"] = hashlib.sha256(identity).hexdigest()
         yield item
 
     def parse_json_ld(self, soup: BeautifulSoup) -> dict | None:
@@ -292,14 +292,16 @@ class AvatureSpider(scrapy.Spider):
     def _read_seed_urls(seed_path: Path) -> list[str]:
         urls: list[str] = []
         with seed_path.open(newline="", encoding="utf-8") as f:
-            reader = csv.reader(f)
+            reader = csv.DictReader(f)
+            url_field = None
             for row in reader:
-                if not row:
-                    continue
-                raw = row[0].strip()
+                if url_field is None:
+                    url_field = next(
+                        (k for k in row if k.strip().lower() in {"url", "seed_url"}),
+                        None,
+                    ) or next(iter(row))  # fallback: first column
+                raw = row.get(url_field, "").strip()
                 if not raw or raw.startswith("#"):
-                    continue
-                if raw.lower() in {"url", "seed_url"}:
                     continue
                 urls.append(raw)
         return urls
@@ -314,25 +316,50 @@ class AvatureSpider(scrapy.Spider):
 
     @staticmethod
     def _unwrap_job_href(href: str) -> str:
-        if "shareUrl=" in href or "url=" in href:
-            parsed = urllib.parse.urlparse(href)
-            qs = urllib.parse.parse_qs(parsed.query)
-            share_param = qs.get("shareUrl") or qs.get("url")
-            if share_param:
-                return unquote(share_param[0])
+        parsed = urllib.parse.urlparse(href)
+        if not parsed.query:
+            return href
+        qs = urllib.parse.parse_qs(parsed.query)
+        share_param = qs.get("shareUrl") or qs.get("url")
+        if share_param:
+            return unquote(share_param[0])
         return href
 
     @staticmethod
     def _find_next_page(soup: BeautifulSoup, current_url: str) -> str | None:
-        next_a = soup.select_one("a.paginationNextLink")
-        if next_a and next_a.get("href"):
-            return urljoin(current_url, str(next_a["href"]))
+        # Primary: explicit next-page link
+        try:
+            next_a = soup.select_one("a.paginationNextLink")
+            if next_a and next_a.get("href"):
+                return urljoin(current_url, str(next_a["href"]))
+        except Exception:
+            pass
+
+        # Fallback: find the jobOffset= link with a strictly greater offset than current
+        try:
+            current_qs = parse_qs(urlparse(current_url).query)
+            current_offset = int((current_qs.get("jobOffset") or ["0"])[0])
+        except Exception:
+            current_offset = 0
+
+        best_href: str | None = None
+        best_offset: int = current_offset  # must be strictly greater to qualify
 
         for a in soup.find_all("a", href=True):
-            href = str(a["href"])
-            if "jobOffset=" in href:
-                return urljoin(current_url, href)
-        return None
+            try:
+                href = str(a["href"])
+                if "jobOffset=" not in href:
+                    continue
+                resolved = urljoin(current_url, href)
+                candidate_qs = parse_qs(urlparse(resolved).query)
+                offset = int((candidate_qs.get("jobOffset") or ["0"])[0])
+                if offset > best_offset:
+                    best_href = href
+                    best_offset = offset
+            except Exception:
+                continue
+
+        return urljoin(current_url, best_href) if best_href else None
 
     @staticmethod
     def _canonicalize_detail_url(url: str) -> str:
