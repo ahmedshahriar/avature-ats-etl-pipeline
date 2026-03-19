@@ -6,7 +6,9 @@ Unit tests for infra stacks.
 import aws_cdk as cdk
 import pytest
 from aws_cdk.assertions import Template
+from stacks.analytics_stack import AvatureEtlAnalyticsStack
 from stacks.base_stack import AvatureEtlBaseStack
+from stacks.dashboard_stack import AvatureEtlDashboardStack
 from stacks.ecr_stack import AvatureEtlEcrStack
 from stacks.ecs_schedule_stack import AvatureEtlEcsScheduleStack
 from stacks.notifications_stack import AvatureEtlNotificationsStack
@@ -102,6 +104,33 @@ def runtime_alarm_stack(app, aws_env, notifications_stack):
         prefix="avature-etl",
         stage="dev",
         topic=notifications_stack.topic,  # ty: ignore[invalid-argument-type]
+        spider_name="avature",
+        env=aws_env,
+    )
+
+
+@pytest.fixture
+def analytics_stack(app, aws_env, base_stack):
+    """Instantiates the Analytics Stack with its dependency on the outputs bucket."""
+    return AvatureEtlAnalyticsStack(
+        app,
+        "avature-etl-analytics",
+        prefix="avature-etl",
+        stage="dev",
+        outputs_bucket=base_stack.outputs_bucket,
+        dataset_root="avature",
+        env=aws_env,
+    )
+
+
+@pytest.fixture
+def dashboard_stack(app, aws_env):
+    """Instantiates the Dashboard Stack."""
+    return AvatureEtlDashboardStack(
+        app,
+        "avature-etl-dashboard",
+        prefix="avature-etl",
+        stage="dev",
         spider_name="avature",
         env=aws_env,
     )
@@ -226,3 +255,44 @@ def test_runtime_alarm_stack_resources_created(runtime_alarm_stack):
     assert low_success_rate_alarm["Threshold"] == 0.95
     assert len(low_success_rate_alarm["AlarmActions"]) == 1
     assert "OKActions" not in low_success_rate_alarm
+
+
+def test_analytics_stack_resources_created(analytics_stack):
+    template = Template.from_stack(analytics_stack)
+
+    template.resource_count_is("AWS::Glue::Database", 1)
+    template.resource_count_is("AWS::Athena::WorkGroup", 1)
+    template.resource_count_is("AWS::Athena::NamedQuery", 5)
+
+    template.has_resource_properties(
+        "AWS::Glue::Database",
+        {
+            "DatabaseInput": {
+                "Name": "avature_etl_dev_analytics",
+            }
+        },
+    )
+
+    template.has_resource_properties(
+        "AWS::Athena::WorkGroup",
+        {
+            "Name": "avature-etl-dev-athena",
+            "State": "ENABLED",
+        },
+    )
+
+    named_queries = template.find_resources("AWS::Athena::NamedQuery")
+    query_props = [resource["Properties"] for resource in named_queries.values()]
+    query_names = {props["Name"] for props in query_props}
+
+    assert query_names == {
+        "avature-etl-dev-01-bronze-jobs-raw",
+        "avature-etl-dev-02-ops-portal-summary-raw",
+        "avature-etl-dev-03-silver-jobs-curated-ctas",
+        "avature-etl-dev-04-silver-jobs-incremental-insert",
+        "avature-etl-dev-05-gold-portal-daily-summary",
+    }
+
+    for props in query_props:
+        assert props["Database"] == "avature_etl_dev_analytics"
+        assert props["WorkGroup"] == "avature-etl-dev-athena"
