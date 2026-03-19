@@ -7,6 +7,7 @@ ecs_task_cpu: 1024
 ecs_task_memory: 2048
 
 # replace with email to receive alerts, or leave null to disable
+# github repo secrets is used to set this value in prod for security
 alert_email: null
 
 # ECS Scheduler (Runs daily at 9:00 AM UTC)
@@ -14,6 +15,11 @@ schedule_hour: "9"
 schedule_minute: "0"
 schedule_timezone: "UTC"
 schedule_enabled: true
+
+# analytics and dashboard settings
+dataset_root: "avature"
+enable_analytics: true
+enable_dashboard: true
 
 # Optional: Enable Container Insights for better monitoring (note: may increase CloudWatch costs)
 container_insights_mode: "disabled"
