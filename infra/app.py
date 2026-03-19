@@ -2,7 +2,9 @@ import os
 
 from aws_cdk import App, Environment, Tags
 from config import AppConfig
+from stacks.analytics_stack import AvatureEtlAnalyticsStack
 from stacks.base_stack import AvatureEtlBaseStack
+from stacks.dashboard_stack import AvatureEtlDashboardStack
 from stacks.ecr_stack import AvatureEtlEcrStack
 from stacks.ecs_schedule_stack import AvatureEtlEcsScheduleStack
 from stacks.notifications_stack import AvatureEtlNotificationsStack
@@ -95,9 +97,45 @@ runtime_alarm_stack = AvatureEtlRuntimeAlarmStack(
     env=aws_env,
 )
 
+# Flow:
+# 1. CDK deploy creates the Glue database, Athena workgroup, and saved Athena named queries.
+# 2. The saved CREATE EXTERNAL TABLE query is not executed during deploy.
+# 3. When that query is run later, Athena creates the Glue table metadata/schema in the Glue database.
+# 4. Partition projection is stored as table properties on the Glue table.
+# 5. At query time, Athena uses those properties to infer partitions/paths in S3.
+
+analytics_stack = None
+if cfg.enable_analytics:
+    analytics_stack = AvatureEtlAnalyticsStack(
+        app,
+        f"{cfg.project_name}-analytics-{cfg.env_name}",
+        prefix=cfg.project_name,
+        stage=cfg.env_name,
+        outputs_bucket=base_stack.outputs_bucket,
+        dataset_root=cfg.dataset_root,
+        env=aws_env,
+    )
+
+dashboard_stack = None
+if cfg.enable_dashboard:
+    dashboard_stack = AvatureEtlDashboardStack(
+        app,
+        f"{cfg.project_name}-dashboard-{cfg.env_name}",
+        prefix=cfg.project_name,
+        stage=cfg.env_name,
+        spider_name="avature",
+        env=aws_env,
+    )
+
 ecs_stack.add_dependency(base_stack)
 ecs_stack.add_dependency(ecr_stack)
 notifications_stack.add_dependency(ecs_stack)
 runtime_alarm_stack.add_dependency(notifications_stack)
+
+if analytics_stack is not None:
+    analytics_stack.add_dependency(base_stack)
+
+if dashboard_stack is not None:
+    dashboard_stack.add_dependency(runtime_alarm_stack)
 
 app.synth()

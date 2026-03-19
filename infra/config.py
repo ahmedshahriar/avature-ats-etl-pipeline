@@ -32,6 +32,11 @@ class AppConfig:
     schedule_timezone: str
     schedule_enabled: bool
 
+    # analytics
+    dataset_root: str
+    enable_analytics: bool
+    enable_dashboard: bool
+
     # Operational thresholds for monitoring and alerting
     empty_run_threshold: int
     job_detail_success_rate_threshold: float
@@ -73,11 +78,16 @@ class AppConfig:
             ecs_task_memory=int(data["ecs_task_memory"]),
             container_insights_mode=str(data.get("container_insights_mode", "disabled")).lower(),
             # monitoring
+            # receive alert_email from GitHub repo secret
             alert_email=(data.get("alert_email") or os.getenv("ALERT_EMAIL") or "").strip() or None,
             schedule_hour=str(data.get("schedule_hour", "9")),
             schedule_minute=str(data.get("schedule_minute", "0")),
             schedule_timezone=str(data.get("schedule_timezone", "UTC")),
             schedule_enabled=bool(data.get("schedule_enabled", env_name == "prod")),
+            # analytics
+            dataset_root=str(data.get("dataset_root", "avature")),
+            enable_analytics=bool(data.get("enable_analytics", True)),
+            enable_dashboard=bool(data.get("enable_dashboard", True)),
             # operational thresholds
             empty_run_threshold=int(data.get("empty_run_threshold", 1)),
             job_detail_success_rate_threshold=float(data.get("job_detail_success_rate_threshold", 0.95)),
