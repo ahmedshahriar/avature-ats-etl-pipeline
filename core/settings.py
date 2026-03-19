@@ -2,6 +2,7 @@ import logging
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from random import choice
 
 try:
     from dotenv import load_dotenv
@@ -66,7 +67,7 @@ STATS_DUMP = True
 TELNETCONSOLE_ENABLED = False
 
 # Concurrency and throttling settings
-CONCURRENT_REQUESTS = int(os.getenv("CONCURRENT_REQUESTS", "8"))
+CONCURRENT_REQUESTS = int(os.getenv("CONCURRENT_REQUESTS", "32"))
 CONCURRENT_REQUESTS_PER_DOMAIN = int(os.getenv("CONCURRENT_REQUESTS_PER_DOMAIN", "4"))
 
 DOWNLOAD_DELAY = float(os.getenv("DOWNLOAD_DELAY", "1.0"))
@@ -83,23 +84,48 @@ AUTOTHROTTLE_START_DELAY = float(os.getenv("AUTOTHROTTLE_START_DELAY", "1.0"))
 AUTOTHROTTLE_MAX_DELAY = float(os.getenv("AUTOTHROTTLE_MAX_DELAY", "20.0"))
 # The average number of requests Scrapy should be sending in parallel to
 # each remote server
-AUTOTHROTTLE_TARGET_CONCURRENCY = float(os.getenv("AUTOTHROTTLE_TARGET_CONCURRENCY", "1.0"))
+AUTOTHROTTLE_TARGET_CONCURRENCY = float(os.getenv("AUTOTHROTTLE_TARGET_CONCURRENCY", "4.0"))
 # Enable showing throttling stats for every response received:
 AUTOTHROTTLE_DEBUG = False
+
+REACTOR_THREADPOOL_MAXSIZE = int(os.getenv("REACTOR_THREADPOOL_MAXSIZE", "20"))
+REDIRECT_MAX_TIMES = int(os.getenv("REDIRECT_MAX_TIMES", "3"))
 
 # -----------------------------------------------------------------------------
 # Default headers / UA
 # -----------------------------------------------------------------------------
 
-USER_AGENT = (
+UA_POOL = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
-)
+    "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36 Edg/145.0.0.0",
+]
+
+USER_AGENT = choice(UA_POOL)  # per-process baseline
 
 
 DEFAULT_REQUEST_HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8,"
+        "application/signed-exchange;v=b3;q=0.7"
+    ),
     "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br, zstd",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Priority": "u=0, i",
+    "Sec-CH-UA": '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": '"macOS"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
 }
 
 # Obey robots.txt rules
@@ -115,15 +141,22 @@ REDIRECT_ENABLED = True
 # -----------------------------------------------------------------------------
 RETRY_ENABLED = True
 RETRY_TIMES = int(os.getenv("RETRY_TIMES", "4"))
-RETRY_HTTP_CODES = [408, 429, 500, 502, 503, 504, 522, 524]
+# https://docs.scrapy.org/en/latest/topics/downloader-middleware.html#retry-exceptions
+RETRY_HTTP_CODES = [406, 408, 429, 500, 502, 503, 504, 522, 524]
 
+
+# See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html#httpcache-middleware-settings
+# random UA
+DOWNLOADER_MIDDLEWARES = {
+    "scrapy.downloadermiddlewares.useragent.UserAgentMiddleware": None,  # disable default
+    "core.middlewares.RandomUserAgentMiddleware": 400,
+}
 
 # Enable and configure HTTP caching (disabled by default)
-# See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html#httpcache-middleware-settings
 if DEPLOY_ENV == "aws":
     HTTPCACHE_ENABLED = False
 else:
-    HTTPCACHE_ENABLED = os.getenv("HTTPCACHE_ENABLED", "0") == "1"
+    HTTPCACHE_ENABLED = os.getenv("HTTPCACHE_ENABLED", "1") == "1"
     # HTTPCACHE_EXPIRATION_SECS = 0
     HTTPCACHE_DIR = os.getenv("HTTPCACHE_DIR", ".httpcache")
     HTTPCACHE_IGNORE_HTTP_CODES = [400, 401, 403, 404, 405, 410, 429, 500, 502, 503, 504, 522, 524]

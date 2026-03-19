@@ -6,7 +6,7 @@ import json
 import re
 import urllib.parse
 from pathlib import Path
-from urllib.parse import unquote, urljoin, urlparse, urlunparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse, urlunparse
 
 import scrapy
 from bs4 import BeautifulSoup
@@ -36,12 +36,42 @@ class AvatureSpider(scrapy.Spider):
         "remote": "remote",
         "working time": "employment_type",
         "job type": "employment_type",
+        # posted_date
         "posted date": "posted_date",
+        "date posted": "posted_date",
+        "date": "posted_date",
+        "open date": "posted_date",
+        "opening date": "posted_date",
+        "publication date": "posted_date",
+        "publish date": "posted_date",
+        "requisition date": "posted_date",
+        "job posting date": "posted_date",
         "posted": "posted_date",
+        # company — additional Avature variants
+        "organization": "company",
+        "organisation": "company",
+        "employer": "company",
+        "business": "company",
+        "division": "company",
+        "brand": "company",
+        "entity": "company",
+        "legal entity": "company",
+        "hiring company": "company",
+        "hiring organization": "company",
+        "hiring organisation": "company",
+        # apply_url
+        "apply": "apply_url",
         "career area (you may select more than one)": "career_area",
         "state": "locations",
         "city": "locations",
+        # exception
+        "state/province/city": "locations",
+        "business unit": "career_area",
+        "time type": "employment_type",
+        "workplace arrangement": "remote",
     }
+
+    _EXCLUDED_PATH_SEGMENTS: frozenset[str] = frozenset({"internalcareers", "internalcareer"})
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -79,6 +109,9 @@ class AvatureSpider(scrapy.Spider):
 
     def parse_listing(self, response):
         """Parse a listing page and schedule requests for each job link and the next page."""
+        if not hasattr(response, "text"):
+            self.logger.warning("Non-text response at listing URL %s, skipping", response.url)
+            return
         soup = BeautifulSoup(response.text, "lxml")
         current_url = response.url
 
@@ -92,6 +125,9 @@ class AvatureSpider(scrapy.Spider):
 
             resolved = self._unwrap_job_href(str(href))
             job_url = urljoin(current_url, resolved)
+            # Guard: skip non-http URLs (mailto:, javascript:, etc.)
+            if not job_url.startswith(("http://", "https://")):
+                continue
             canonical_job_url = self._canonicalize_detail_url(job_url)
 
             if canonical_job_url in seen_on_page:
@@ -110,7 +146,7 @@ class AvatureSpider(scrapy.Spider):
                 link,
                 callback=self.parse_job,
                 meta={
-                    "portal_key": response.meta.get("portal_key", self._portal_key_from_url(link)),
+                    "portal_key": response.meta.get("portal_key") or self._portal_key_from_url(link),
                     "input_seed_url": response.meta.get("input_seed_url"),
                     "request_kind": "job_detail",
                 },
@@ -122,7 +158,7 @@ class AvatureSpider(scrapy.Spider):
                 next_link,
                 callback=self.parse_listing,
                 meta={
-                    "portal_key": response.meta.get("portal_key", self._portal_key_from_url(next_link)),
+                    "portal_key": response.meta.get("portal_key") or self._portal_key_from_url(link),
                     "input_seed_url": response.meta.get("input_seed_url"),
                     "request_kind": "pagination",
                 },
@@ -130,6 +166,9 @@ class AvatureSpider(scrapy.Spider):
 
     def parse_job(self, response):
         """Parse a job detail page into a JobItem."""
+        if not hasattr(response, "text"):
+            self.logger.warning("Non-text response at job URL %s, skipping", response.url)
+            return
         soup = BeautifulSoup(response.text, "lxml")
         item = AvatureJobItem()
 
@@ -142,6 +181,7 @@ class AvatureSpider(scrapy.Spider):
         item["portal_key"] = response.meta.get("portal_key") or self._portal_key_from_url(canonical_source_url)
         item["input_seed_url"] = response.meta.get("input_seed_url")
         item["run_id"] = self.settings.get("RUN_ID")
+        item["run_date"] = self.settings.get("RUN_DATE")
         item["scraped_at"] = self._iso_now()
 
         meta = soup.find("meta", attrs={"name": "avature.portallist.search"})
@@ -151,9 +191,6 @@ class AvatureSpider(scrapy.Spider):
             match = re.search(r"/([0-9]{3,})(?:[/?#]|$)", canonical_source_url)
             if match:
                 item["job_id"] = match.group(1)
-
-        identity = f"{item['portal_key']}|{item.get('job_id') or canonical_source_url}".encode()
-        item["job_hash"] = hashlib.sha256(identity).hexdigest()
 
         # title
         title = None
@@ -262,6 +299,8 @@ class AvatureSpider(scrapy.Spider):
                     item["company"] = txt
         # raw fields
         item["raw_fields"] = raw_fields
+        identity = f"{item['portal_key']}|{item.get('job_id') or canonical_source_url}".encode()
+        item["job_hash"] = hashlib.sha256(identity).hexdigest()
         yield item
 
     def parse_json_ld(self, soup: BeautifulSoup) -> dict | None:
@@ -289,17 +328,41 @@ class AvatureSpider(scrapy.Spider):
         return project_root / configured
 
     @staticmethod
+    def _is_excluded_url(url: str) -> bool:
+        """Return True if the URL matches a non-production path pattern."""
+        try:
+            parsed = urlparse(url)
+            # Check subdomain prefix
+            host = (parsed.hostname or "").lower()
+            subdomain = host.split(".")[0]
+            if subdomain in AvatureSpider._EXCLUDED_PATH_SEGMENTS:
+                return True
+            # Check each path segment
+            path_parts = {p.lower() for p in parsed.path.split("/") if p}
+            if path_parts & AvatureSpider._EXCLUDED_PATH_SEGMENTS:
+                return True
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
     def _read_seed_urls(seed_path: Path) -> list[str]:
         urls: list[str] = []
         with seed_path.open(newline="", encoding="utf-8") as f:
-            reader = csv.reader(f)
+            reader = csv.DictReader(f)
+            url_field = None
             for row in reader:
-                if not row:
-                    continue
-                raw = row[0].strip()
+                if url_field is None:
+                    url_field = next(
+                        (k for k in row if k.strip().lower() in {"url", "seed_url"}),
+                        None,
+                    ) or next(iter(row))  # fallback: first column
+                raw = row.get(url_field, "").strip().rstrip(",").strip()
                 if not raw or raw.startswith("#"):
                     continue
-                if raw.lower() in {"url", "seed_url"}:
+                if not raw.startswith(("http://", "https://")):
+                    continue
+                if AvatureSpider._is_excluded_url(raw):
                     continue
                 urls.append(raw)
         return urls
@@ -314,25 +377,50 @@ class AvatureSpider(scrapy.Spider):
 
     @staticmethod
     def _unwrap_job_href(href: str) -> str:
-        if "shareUrl=" in href or "url=" in href:
-            parsed = urllib.parse.urlparse(href)
-            qs = urllib.parse.parse_qs(parsed.query)
-            share_param = qs.get("shareUrl") or qs.get("url")
-            if share_param:
-                return unquote(share_param[0])
+        parsed = urllib.parse.urlparse(href)
+        if not parsed.query:
+            return href
+        qs = urllib.parse.parse_qs(parsed.query)
+        share_param = qs.get("shareUrl") or qs.get("url")
+        if share_param:
+            return unquote(share_param[0])
         return href
 
     @staticmethod
     def _find_next_page(soup: BeautifulSoup, current_url: str) -> str | None:
-        next_a = soup.select_one("a.paginationNextLink")
-        if next_a and next_a.get("href"):
-            return urljoin(current_url, str(next_a["href"]))
+        # Primary: explicit next-page link
+        try:
+            next_a = soup.select_one("a.paginationNextLink")
+            if next_a and next_a.get("href"):
+                return urljoin(current_url, str(next_a["href"]))
+        except Exception:
+            pass
+
+        # Fallback: find the jobOffset= link with a strictly greater offset than current
+        try:
+            current_qs = parse_qs(urlparse(current_url).query)
+            current_offset = int((current_qs.get("jobOffset") or ["0"])[0])
+        except Exception:
+            current_offset = 0
+
+        best_href: str | None = None
+        best_offset: int = current_offset  # must be strictly greater to qualify
 
         for a in soup.find_all("a", href=True):
-            href = str(a["href"])
-            if "jobOffset=" in href:
-                return urljoin(current_url, href)
-        return None
+            try:
+                href = str(a["href"])
+                if "jobOffset=" not in href:
+                    continue
+                resolved = urljoin(current_url, href)
+                candidate_qs = parse_qs(urlparse(resolved).query)
+                offset = int((candidate_qs.get("jobOffset") or ["0"])[0])
+                if offset > best_offset:
+                    best_href = href
+                    best_offset = offset
+            except Exception:
+                continue
+
+        return urljoin(current_url, best_href) if best_href else None
 
     @staticmethod
     def _canonicalize_detail_url(url: str) -> str:

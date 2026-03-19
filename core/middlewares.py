@@ -1,92 +1,57 @@
-from scrapy import signals
+import random
+import re
 
-# useful for handling different item types with a single interface
+UA_TO_CLIENT_HINTS: dict[str, tuple[str, str]] = {
+    "145": (
+        '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
+        '"macOS"',
+    ),
+    "144": (
+        '"Not:A-Brand";v="99", "Google Chrome";v="144", "Chromium";v="144"',
+        '"Linux"',
+    ),
+    "145_edge": (
+        '"Not A;Brand";v="99", "Chromium";v="145", "Microsoft Edge";v="145"',
+        '"Windows"',
+    ),
+    "144_edge": (
+        '"Not A;Brand";v="99", "Chromium";v="144", "Microsoft Edge";v="144"',
+        '"Windows"',
+    ),
+}
 
-
-class CoreSpiderMiddleware:
-    # Not all methods need to be defined. If a method is not defined,
-    # scrapy acts as if the spider middleware does not modify the
-    # passed objects.
-
-    @classmethod
-    def from_crawler(cls, crawler):
-        s = cls()
-        crawler.signals.connect(s.spider_opened, signal=signals.spider_opened)
-        return s
-
-    def process_spider_input(self, response, spider):
-        # Called for each response that goes through the spider
-        # middleware and into the spider.
-
-        # Should return None or raise an exception.
-        return None
-
-    def process_spider_output(self, response, result, spider):
-        # Called with the results returned from the Spider, after
-        # it has processed the response.
-
-        # Must return an iterable of Request, or item objects.
-        for i in result:
-            yield from i
-
-    def process_spider_exception(self, response, exception, spider):
-        # Called when a spider or process_spider_input() method
-        # (from other spider middleware) raises an exception.
-
-        # Should return either None or an iterable of Request or item objects.
-        pass
-
-    async def process_start(self, start):
-        # Called with an async iterator over the spider start() method or the
-        # matching method of an earlier spider middleware.
-        async for item_or_request in start:
-            yield item_or_request
-
-    def spider_opened(self, spider):
-        spider.logger.info("Spider opened: %s", spider.name)
+# UAs that must NOT receive Sec-CH-UA headers (non-Chromium engines)
+_NO_CLIENT_HINTS_PATTERN = re.compile(r"(Safari/|Firefox/|Gecko/)", re.IGNORECASE)
 
 
-class CoreDownloaderMiddleware:
-    # Not all methods need to be defined. If a method is not defined,
-    # scrapy acts as if the downloader middleware does not modify the
-    # passed objects.
+class RandomUserAgentMiddleware:
+    def __init__(self, ua_pool: list[str]):
+        self.ua_pool = ua_pool
 
     @classmethod
     def from_crawler(cls, crawler):
-        s = cls()
-        crawler.signals.connect(s.spider_opened, signal=signals.spider_opened)
-        return s
+        pool = crawler.settings.getlist("UA_POOL")
+        if not pool:
+            raise ValueError("UA_POOL must be set in settings")
+        return cls(pool)
 
-    def process_request(self, request, spider):
-        # Called for each request that goes through the downloader
-        # middleware.
+    def process_request(self, request, **kwargs):  # **kwargs: forward-compat with Scrapy 2.14+
+        ua = random.choice(self.ua_pool)
+        request.headers["User-Agent"] = ua
 
-        # Must either:
-        # - return None: continue processing this request
-        # - or return a Response object
-        # - or return a Request object
-        # - or raise IgnoreRequest: process_exception() methods of
-        #   installed downloader middleware will be called
-        return None
+        # Non-Chromium UAs must not send Client Hints — it's a fingerprint contradiction
+        if _NO_CLIENT_HINTS_PATTERN.search(ua) and "Chrome" not in ua:
+            request.headers.pop("Sec-CH-UA", None)
+            request.headers.pop("Sec-CH-UA-Mobile", None)
+            request.headers.pop("Sec-CH-UA-Platform", None)
+            return
 
-    def process_response(self, request, response, spider):
-        # Called with the response returned from the downloader.
+        match = re.search(r"Chrome/(\d+)", ua)
+        version = match.group(1) if match else "145"
+        is_edge = "Edg/" in ua
+        key = f"{version}_edge" if is_edge else version
 
-        # Must either;
-        # - return a Response object
-        # - return a Request object
-        # - or raise IgnoreRequest
-        return response
-
-    def process_exception(self, request, exception, spider):
-        # Called when a download handler or a process_request()
-        # (from other downloader middleware) raises an exception.
-
-        # Must either:
-        # - return None: continue processing this exception
-        # - return a Response object: stops process_exception() chain
-        # - return a Request object: stops process_exception() chain
-        pass
-
-    def spider_opened(self, spider):
-        spider.logger.info("Spider opened: %s", spider.name)
+        hints = UA_TO_CLIENT_HINTS.get(key, UA_TO_CLIENT_HINTS["145"])
+        request.headers["Sec-CH-UA"] = hints[0]
+        request.headers["Sec-CH-UA-Platform"] = hints[1]
+        request.headers["Sec-CH-UA-Mobile"] = "?0"

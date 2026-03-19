@@ -165,13 +165,8 @@ class ValidationPipeline:
         text = str(value).strip()
         if not text:
             return None
-        if date_parser is not None:
-            try:
-                return date_parser.parse(text).date().isoformat()
-            except Exception:
-                return None
         try:
-            return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
+            return date_parser.parse(text).date().isoformat()
         except Exception:
             return None
 
@@ -430,9 +425,6 @@ class JobPipeline:
         for key in self.TRACKED_COMPLETENESS_FIELDS:
             value = item.get(key)
             if value:
-                # For list fields check if non‑empty
-                if isinstance(value, list) and not value:
-                    continue
                 self.field_counts[key] += 1
 
         url = item.get("source_url") or item.get("canonical_source_url")
@@ -468,7 +460,7 @@ class DynamoDBDedupePipeline:
     @classmethod
     def from_crawler(cls, crawler):
         obj = cls.__new__(cls)  # bypass __init__
-        obj.deploy_env = crawler.settings.get("DEPLOY_ENV", "local").lower()
+        obj.deploy_env = crawler.settings.get("DEPLOY_ENV", "aws").lower()
         obj.table_name = crawler.settings.get("DYNAMODB_TABLE_NAME")
         obj.ttl_days = crawler.settings.get("DYNAMODB_TTL_DAYS")
 
@@ -497,8 +489,9 @@ class DynamoDBDedupePipeline:
         if not self.table:
             return item
 
-        job_hash = item.get("job_hash") or item.get("job_id")
+        job_hash = item.get("job_hash")
         if not job_hash:
+            spider.logger.warning("Item missing job_hash, skipping DDB dedup: %s", item.get("source_url"))
             return item
 
         # In-run fast dedupe to avoid extra DynamoDB writes
@@ -510,7 +503,14 @@ class DynamoDBDedupePipeline:
         expires_at = int(time.time()) + int(self.ttl_days) * 86400
         try:
             self.table.put_item(
-                Item={"job_hash": job_hash, "first_seen_ts": int(time.time()), "expires_at": expires_at},
+                Item={
+                    "job_hash": job_hash,
+                    "first_seen_run_id": item.get("run_id", ""),
+                    "portal_key": item.get("portal_key", ""),
+                    "source_url": item.get("source_url", ""),
+                    "first_seen_ts": int(time.time()),
+                    "expires_at": expires_at,
+                },
                 ConditionExpression="attribute_not_exists(job_hash)",
             )
             return item
