@@ -9,6 +9,7 @@ from stacks.ecr_stack import AvatureEtlEcrStack
 from stacks.ecs_schedule_stack import AvatureEtlEcsScheduleStack
 from stacks.notifications_stack import AvatureEtlNotificationsStack
 from stacks.runtime_alarm_stack import AvatureEtlRuntimeAlarmStack
+from stacks.workflow_stack import AvatureEtlWorkflowStack
 
 app = App()
 
@@ -116,6 +117,33 @@ if cfg.enable_analytics:
         env=aws_env,
     )
 
+# EventBridge schedule
+#   -> Step Functions Standard
+#       -> ECS Fargate scraper (.sync)
+#       -> Athena silver promotion
+#       -> success / fail
+
+workflow_stack = None
+if cfg.workflow_enabled and analytics_stack is not None:
+    workflow_stack = AvatureEtlWorkflowStack(
+        app,
+        f"{cfg.project_name}-workflow-{cfg.env_name}",
+        prefix=cfg.project_name,
+        stage=cfg.env_name,
+        ecs_cluster=ecs_stack.cluster,
+        ecs_task_definition=ecs_stack.task_definition,
+        ecs_task_security_group=ecs_stack.task_security_group,
+        analytics_database_name=analytics_stack.database_name,
+        athena_workgroup_name=analytics_stack.workgroup_name,
+        notification_topic_arn=notifications_stack.topic.topic_arn if notifications_stack is not None else None,
+        schedule_enabled=True,
+        schedule_hour=cfg.schedule_hour,
+        schedule_minute=cfg.schedule_minute,
+        athena_poll_seconds=cfg.athena_poll_seconds,
+        workflow_timeout_minutes=cfg.workflow_timeout_minutes,
+        env=aws_env,
+    )
+
 dashboard_stack = None
 if cfg.enable_dashboard:
     dashboard_stack = AvatureEtlDashboardStack(
@@ -134,6 +162,11 @@ runtime_alarm_stack.add_dependency(notifications_stack)
 
 if analytics_stack is not None:
     analytics_stack.add_dependency(base_stack)
+
+if workflow_stack is not None:
+    workflow_stack.add_dependency(ecs_stack)
+    if analytics_stack is not None:
+        workflow_stack.add_dependency(analytics_stack)
 
 if dashboard_stack is not None:
     dashboard_stack.add_dependency(runtime_alarm_stack)
