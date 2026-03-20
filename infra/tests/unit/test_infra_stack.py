@@ -13,6 +13,7 @@ from stacks.ecr_stack import AvatureEtlEcrStack
 from stacks.ecs_schedule_stack import AvatureEtlEcsScheduleStack
 from stacks.notifications_stack import AvatureEtlNotificationsStack
 from stacks.runtime_alarm_stack import AvatureEtlRuntimeAlarmStack
+from stacks.workflow_stack import AvatureEtlWorkflowStack
 
 # =============================================================================
 # Pytest Fixtures (Shared Setup)
@@ -103,7 +104,7 @@ def runtime_alarm_stack(app, aws_env, notifications_stack):
         "avature-etl-runtime-alarms",
         prefix="avature-etl",
         stage="dev",
-        topic=notifications_stack.topic,  # ty: ignore[invalid-argument-type]
+        topic=notifications_stack.topic,  # type: ignore[arg-type]
         spider_name="avature",
         env=aws_env,
     )
@@ -111,7 +112,7 @@ def runtime_alarm_stack(app, aws_env, notifications_stack):
 
 @pytest.fixture
 def analytics_stack(app, aws_env, base_stack):
-    """Instantiates the Analytics Stack with its dependency on the outputs bucket."""
+    """Instantiates the Analytics Stack."""
     return AvatureEtlAnalyticsStack(
         app,
         "avature-etl-analytics",
@@ -132,6 +133,29 @@ def dashboard_stack(app, aws_env):
         prefix="avature-etl",
         stage="dev",
         spider_name="avature",
+        env=aws_env,
+    )
+
+
+@pytest.fixture
+def workflow_stack(app, aws_env, ecs_stack, analytics_stack, notifications_stack):
+    """Instantiates the Workflow Stack."""
+    return AvatureEtlWorkflowStack(
+        app,
+        "avature-etl-workflow",
+        prefix="avature-etl",
+        stage="dev",
+        ecs_cluster=ecs_stack.cluster,
+        ecs_task_definition=ecs_stack.task_definition,
+        ecs_task_security_group=ecs_stack.task_security_group,
+        analytics_database_name=analytics_stack.database_name,
+        athena_workgroup_name=analytics_stack.workgroup_name,
+        notification_topic_arn=notifications_stack.topic.topic_arn,
+        schedule_enabled=True,
+        schedule_hour="10",
+        schedule_minute="0",
+        athena_poll_seconds=15,
+        workflow_timeout_minutes=180,
         env=aws_env,
     )
 
@@ -219,6 +243,7 @@ def test_notifications_stack_resources_created(notifications_stack):
 
     template.resource_count_is("AWS::SNS::Topic", 1)
     template.resource_count_is("AWS::CloudWatch::Alarm", 1)
+
     template.has_resource_properties(
         "AWS::CloudWatch::Alarm",
         {
@@ -296,3 +321,54 @@ def test_analytics_stack_resources_created(analytics_stack):
     for props in query_props:
         assert props["Database"] == "avature_etl_dev_analytics"
         assert props["WorkGroup"] == "avature-etl-dev-athena"
+
+
+def test_dashboard_stack_resources_created(dashboard_stack):
+    template = Template.from_stack(dashboard_stack)
+
+    template.resource_count_is("AWS::CloudWatch::Dashboard", 1)
+    template.has_resource_properties(
+        "AWS::CloudWatch::Dashboard",
+        {
+            "DashboardName": "avature-etl-dev-ops",
+        },
+    )
+
+
+def test_workflow_stack_resources_created(workflow_stack):
+    template = Template.from_stack(workflow_stack)
+
+    template.resource_count_is("AWS::StepFunctions::StateMachine", 1)
+    template.resource_count_is("AWS::Events::Rule", 1)
+    template.resource_count_is("AWS::Logs::LogGroup", 1)
+    template.resource_count_is("AWS::CloudWatch::Alarm", 3)
+
+    template.has_resource_properties(
+        "AWS::StepFunctions::StateMachine",
+        {
+            "StateMachineName": "avature-etl-dev-workflow",
+        },
+    )
+
+    template.has_resource_properties(
+        "AWS::Events::Rule",
+        {
+            "ScheduleExpression": "cron(0 10 * * ? *)",
+            "State": "ENABLED",
+        },
+    )
+
+    alarms = template.find_resources("AWS::CloudWatch::Alarm")
+    alarm_properties = [resource["Properties"] for resource in alarms.values()]
+    alarm_names = {props["AlarmName"] for props in alarm_properties}
+
+    assert alarm_names == {
+        "avature-etl-dev-workflow-failed",
+        "avature-etl-dev-workflow-timed-out",
+        "avature-etl-dev-workflow-throttled",
+    }
+
+    for props in alarm_properties:
+        assert props["ComparisonOperator"] == "GreaterThanOrEqualToThreshold"
+        assert props["Threshold"] == 1
+        assert len(props["AlarmActions"]) == 1
