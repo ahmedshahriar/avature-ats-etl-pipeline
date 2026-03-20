@@ -39,6 +39,10 @@ class AvatureEtlAnalyticsStack(Stack):
 
         database_name = f"{prefix.replace('-', '_')}_{stage}_analytics"
         workgroup_name = f"{prefix}-{stage}-athena"
+
+        self.database_name = database_name
+        self.workgroup_name = workgroup_name
+
         bucket_name = outputs_bucket.bucket_name
         athena_results_prefix = f"{dataset_root}/athena-results/"
 
