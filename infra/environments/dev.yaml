@@ -20,6 +20,11 @@ dataset_root: "avature"
 enable_analytics: true
 enable_dashboard: true
 
+# step function
+workflow_enabled: true
+workflow_timeout_minutes: 180
+athena_poll_seconds: 15
+
 # Optional: Enable Container Insights for better monitoring (note: may increase CloudWatch costs)
 container_insights_mode: "disabled"
 empty_run_threshold: 1

@@ -36,6 +36,9 @@ class AppConfig:
     dataset_root: str
     enable_analytics: bool
     enable_dashboard: bool
+    workflow_enabled: bool
+    workflow_timeout_minutes: int
+    athena_poll_seconds: int
 
     # Operational thresholds for monitoring and alerting
     empty_run_threshold: int
@@ -88,6 +91,9 @@ class AppConfig:
             dataset_root=str(data.get("dataset_root", "avature")),
             enable_analytics=bool(data.get("enable_analytics", True)),
             enable_dashboard=bool(data.get("enable_dashboard", True)),
+            workflow_enabled=bool(data.get("workflow_enabled", True)),
+            workflow_timeout_minutes=int(data.get("workflow_timeout_minutes", 180)),
+            athena_poll_seconds=int(data.get("athena_poll_seconds", 15)),
             # operational thresholds
             empty_run_threshold=int(data.get("empty_run_threshold", 1)),
             job_detail_success_rate_threshold=float(data.get("job_detail_success_rate_threshold", 0.95)),

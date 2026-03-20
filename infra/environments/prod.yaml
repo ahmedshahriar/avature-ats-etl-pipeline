@@ -14,12 +14,18 @@ alert_email: null
 schedule_hour: "9"
 schedule_minute: "0"
 schedule_timezone: "UTC"
-schedule_enabled: true
+# the workflow will own the schedule
+schedule_enabled: false
 
 # analytics and dashboard settings
 dataset_root: "avature"
 enable_analytics: true
 enable_dashboard: true
+
+# step function
+workflow_enabled: true
+workflow_timeout_minutes: 180
+athena_poll_seconds: 15
 
 # Optional: Enable Container Insights for better monitoring (note: may increase CloudWatch costs)
 container_insights_mode: "disabled"
