@@ -4,6 +4,7 @@ from aws_cdk import App, Environment, Tags
 from config import AppConfig
 from stacks.analytics_stack import AvatureEtlAnalyticsStack
 from stacks.base_stack import AvatureEtlBaseStack
+from stacks.cost_guardrails_stack import AvatureEtlCostGuardrailsStack
 from stacks.dashboard_stack import AvatureEtlDashboardStack
 from stacks.ecr_stack import AvatureEtlEcrStack
 from stacks.ecs_schedule_stack import AvatureEtlEcsScheduleStack
@@ -58,6 +59,16 @@ notifications_stack = AvatureEtlNotificationsStack(
     f"{cfg.project_name}-notifications-{cfg.env_name}",
     prefix=cfg.project_name,
     stage=cfg.env_name,
+    alert_email=cfg.alert_email,
+    env=aws_env,
+)
+
+cost_guardrails_stack = AvatureEtlCostGuardrailsStack(
+    app,
+    f"{cfg.project_name}-cost-guardrails-{cfg.env_name}",
+    prefix=cfg.project_name,
+    stage=cfg.env_name,
+    monthly_budget_usd=cfg.monthly_budget_usd,
     alert_email=cfg.alert_email,
     env=aws_env,
 )
@@ -119,6 +130,7 @@ if cfg.enable_analytics:
         stage=cfg.env_name,
         outputs_bucket=base_stack.outputs_bucket,
         dataset_root=cfg.dataset_root,
+        athena_bytes_scanned_cutoff_mb=cfg.athena_bytes_scanned_cutoff_mb,
         env=aws_env,
     )
 
@@ -147,6 +159,7 @@ if cfg.workflow_enabled and analytics_stack is not None:
         schedule_timezone=cfg.schedule_timezone,
         athena_poll_seconds=cfg.athena_poll_seconds,
         workflow_timeout_minutes=cfg.workflow_timeout_minutes,
+        ecs_task_timeout_minutes=cfg.ecs_task_timeout_minutes,
         env=aws_env,
     )
 

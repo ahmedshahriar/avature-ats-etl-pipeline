@@ -28,6 +28,7 @@ class AvatureEtlAnalyticsStack(Stack):
         stage: str,
         outputs_bucket: s3.IBucket,
         dataset_root: str = "avature",
+        athena_bytes_scanned_cutoff_mb: int = 512,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -69,6 +70,7 @@ class AvatureEtlAnalyticsStack(Stack):
                 # a CTAS query that specifies external_location fails
                 enforce_work_group_configuration=False,
                 publish_cloud_watch_metrics_enabled=False,
+                bytes_scanned_cutoff_per_query=athena_bytes_scanned_cutoff_mb * 1024 * 1024,
                 result_configuration=athena.CfnWorkGroup.ResultConfigurationProperty(
                     output_location=f"s3://{bucket_name}/{athena_results_prefix}"
                 ),
@@ -121,6 +123,7 @@ class AvatureEtlAnalyticsStack(Stack):
         CfnOutput(self, "AnalyticsDatabaseName", value=database_name)
         CfnOutput(self, "AthenaWorkGroupName", value=workgroup_name)
         CfnOutput(self, "AthenaResultsLocation", value=f"s3://{bucket_name}/{athena_results_prefix}")
+        CfnOutput(self, "AthenaBytesScannedCutoffMb", value=str(athena_bytes_scanned_cutoff_mb))
 
     @staticmethod
     def _load_sql_template(

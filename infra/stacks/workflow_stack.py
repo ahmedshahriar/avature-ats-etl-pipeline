@@ -46,6 +46,7 @@ class AvatureEtlWorkflowStack(Stack):
         schedule_timezone: str = "UTC",
         athena_poll_seconds: int = 15,
         workflow_timeout_minutes: int = 180,
+        ecs_task_timeout_minutes: int = 150,
         **kwargs,
     ) -> None:
         super().__init__(
@@ -91,6 +92,7 @@ class AvatureEtlWorkflowStack(Stack):
             subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
             security_groups=[ecs_task_security_group],
             propagated_tag_source=ecs.PropagatedTagSource.TASK_DEFINITION,
+            task_timeout=sfn.Timeout.duration(Duration.minutes(ecs_task_timeout_minutes)),
             result_path="$.ecs",
         )
         # manual override run
@@ -111,6 +113,7 @@ class AvatureEtlWorkflowStack(Stack):
             subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
             security_groups=[ecs_task_security_group],
             propagated_tag_source=ecs.PropagatedTagSource.TASK_DEFINITION,
+            task_timeout=sfn.Timeout.duration(Duration.minutes(ecs_task_timeout_minutes)),
             container_overrides=[
                 tasks.ContainerOverride(
                     container_definition=container_definition,
@@ -147,6 +150,36 @@ class AvatureEtlWorkflowStack(Stack):
             self,
             "InvalidManualOverrideInput",
             cause="Provide both run_date_override and run_id_override, or neither.",
+        )
+
+        scraper_task_failed = sfn.Fail(
+            self,
+            "ScraperTaskFailed",
+            cause="ECS scraper task failed or timed out.",
+        )
+
+        athena_submission_failed = sfn.Fail(
+            self,
+            "AthenaSubmissionFailed",
+            cause="Failed to submit Athena silver promotion query.",
+        )
+
+        athena_poll_failed = sfn.Fail(
+            self,
+            "AthenaPollFailed",
+            cause="Failed while polling Athena silver promotion query.",
+        )
+
+        run_scraper_default.add_catch(
+            scraper_task_failed,
+            errors=["States.ALL"],
+            result_path="$.error",
+        )
+
+        run_scraper_with_manual_overrides.add_catch(
+            scraper_task_failed,
+            errors=["States.ALL"],
+            result_path="$.error",
         )
 
         use_manual_ecs_overrides = sfn.Choice(self, "UseManualEcsOverrides?")
@@ -192,6 +225,23 @@ class AvatureEtlWorkflowStack(Stack):
             result_path="$.athenaStart",
         )
 
+        for athena_start in (start_silver_insert_default, start_silver_insert_manual):
+            athena_start.add_retry(
+                errors=[
+                    "Athena.InternalServerException",
+                    "Athena.TooManyRequestsException",
+                    "States.TaskFailed",
+                ],
+                interval=Duration.seconds(20),
+                max_attempts=3,
+                backoff_rate=2.0,
+            )
+            athena_start.add_catch(
+                athena_submission_failed,
+                errors=["States.ALL"],
+                result_path="$.error",
+            )
+
         wait_for_query = sfn.Wait(
             self,
             "WaitForAthena",
@@ -203,6 +253,23 @@ class AvatureEtlWorkflowStack(Stack):
             "GetAthenaQueryExecution",
             query_execution_id=sfn.JsonPath.string_at("$.athenaStart.QueryExecutionId"),
             result_path="$.athenaQuery",
+        )
+
+        get_query.add_retry(
+            errors=[
+                "Athena.InternalServerException",
+                "Athena.TooManyRequestsException",
+                "States.TaskFailed",
+            ],
+            interval=Duration.seconds(20),
+            max_attempts=6,
+            backoff_rate=2.0,
+        )
+
+        get_query.add_catch(
+            athena_poll_failed,
+            errors=["States.ALL"],
+            result_path="$.error",
         )
 
         workflow_succeeded = sfn.Succeed(self, "WorkflowSucceeded")

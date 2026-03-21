@@ -19,14 +19,17 @@ schedule_timezone: "UTC"
 #   workflow  -> schedule Step Functions (recommended; silver auto-promotion included)
 schedule_target: "none"
 
-# analytics and dashboard settings
+# analytics/cost guardrails
 dataset_root: "avature"
 enable_analytics: true
 enable_dashboard: true
+athena_bytes_scanned_cutoff_mb: 512
+monthly_budget_usd: 10
 
 # step function
 workflow_enabled: true
 workflow_timeout_minutes: 180
+ecs_task_timeout_minutes: 150
 athena_poll_seconds: 15
 
 # Optional: Enable Container Insights for better monitoring (note: may increase CloudWatch costs)
@@ -38,6 +41,7 @@ tags:
   Owner: "ahmed"
   ManagedBy: "cdk"
   CostCenter: "free-tier"
+  Application: "avature-ats-etl"
 
 scraper_runtime:
   concurrent_requests: 8

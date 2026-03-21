@@ -32,13 +32,16 @@ class AppConfig:
     schedule_timezone: str
     schedule_target: str
 
-    # analytics
+    # analytics / cost guardrails
     dataset_root: str
     enable_analytics: bool
     enable_dashboard: bool
     workflow_enabled: bool
     workflow_timeout_minutes: int
     athena_poll_seconds: int
+    athena_bytes_scanned_cutoff_mb: int
+    monthly_budget_usd: float | None
+    ecs_task_timeout_minutes: int
 
     # Operational thresholds for monitoring and alerting
     empty_run_threshold: int
@@ -101,13 +104,18 @@ class AppConfig:
             schedule_minute=str(data.get("schedule_minute", "0")),
             schedule_timezone=str(data.get("schedule_timezone", "UTC")),
             schedule_target=schedule_target,
-            # analytics
+            # analytics / cost guardrails
             dataset_root=str(data.get("dataset_root", "avature")),
             enable_analytics=enable_analytics,
             enable_dashboard=bool(data.get("enable_dashboard", True)),
             workflow_enabled=workflow_enabled,
             workflow_timeout_minutes=int(data.get("workflow_timeout_minutes", 180)),
             athena_poll_seconds=int(data.get("athena_poll_seconds", 15)),
+            athena_bytes_scanned_cutoff_mb=int(data.get("athena_bytes_scanned_cutoff_mb", 512)),
+            monthly_budget_usd=(
+                float(data["monthly_budget_usd"]) if data.get("monthly_budget_usd") is not None else None
+            ),
+            ecs_task_timeout_minutes=int(data.get("ecs_task_timeout_minutes", 150)),
             # operational thresholds
             empty_run_threshold=int(data.get("empty_run_threshold", 1)),
             job_detail_success_rate_threshold=float(data.get("job_detail_success_rate_threshold", 0.95)),
