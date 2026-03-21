@@ -1,11 +1,12 @@
 -- Incremental daily load into the curated silver jobs table.
 -- Purpose:
---   - append today's valid bronze rows into the silver Parquet dataset
+--   - append valid bronze rows into the silver Parquet dataset for one run_date partition
 --   - stay safe to rerun by skipping rows already present in silver for the same run_date/job_hash
 --
 -- Execution guidance:
---   - this query assumes a daily workflow and promotes the current UTC run_date partition
---   - reruns on the same day do not duplicate rows because of the anti-join
+--   - the saved Athena named query resolves __RUN_DATE_FILTER__ to CAST(current_date AS varchar)
+--   - the Step Functions manual override path injects the requested run_date
+--   - reruns for the same run_date do not duplicate rows because of the anti-join
 --
 -- Data quality rules:
 --   - only records marked as valid in bronze are inserted
@@ -41,5 +42,5 @@ LEFT JOIN __DATABASE_NAME__.silver_jobs_curated s
     ON s.run_date = b.run_date
    AND s.job_hash = b.job_hash
 WHERE b.record_status = 'valid'
-  AND b.run_date = CAST(current_date AS varchar)
+  AND b.run_date = __RUN_DATE_FILTER__
   AND s.job_hash IS NULL;
