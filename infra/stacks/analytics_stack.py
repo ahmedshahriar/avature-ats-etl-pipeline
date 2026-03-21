@@ -39,6 +39,10 @@ class AvatureEtlAnalyticsStack(Stack):
 
         database_name = f"{prefix.replace('-', '_')}_{stage}_analytics"
         workgroup_name = f"{prefix}-{stage}-athena"
+
+        self.database_name = database_name
+        self.workgroup_name = workgroup_name
+
         bucket_name = outputs_bucket.bucket_name
         athena_results_prefix = f"{dataset_root}/athena-results/"
 
@@ -125,10 +129,12 @@ class AvatureEtlAnalyticsStack(Stack):
         database_name: str,
         bucket_name: str,
         dataset_root: str,
+        run_date_filter: str = "CAST(current_date AS varchar)",
     ) -> str:
         sql = path.read_text(encoding="utf-8")
         return (
             sql.replace("__DATABASE_NAME__", database_name)
             .replace("__BUCKET_NAME__", bucket_name)
             .replace("__DATASET_ROOT__", dataset_root)
+            .replace("__RUN_DATE_FILTER__", run_date_filter)
         )

@@ -30,12 +30,15 @@ class AppConfig:
     schedule_hour: str
     schedule_minute: str
     schedule_timezone: str
-    schedule_enabled: bool
+    schedule_target: str
 
     # analytics
     dataset_root: str
     enable_analytics: bool
     enable_dashboard: bool
+    workflow_enabled: bool
+    workflow_timeout_minutes: int
+    athena_poll_seconds: int
 
     # Operational thresholds for monitoring and alerting
     empty_run_threshold: int
@@ -67,6 +70,20 @@ class AppConfig:
             **{k: v for k, v in raw_tags.items() if v is not None},
         }
 
+        enable_analytics = bool(data.get("enable_analytics", True))
+        workflow_enabled = bool(data.get("workflow_enabled", True))
+
+        schedule_target = str(data.get("schedule_target", "workflow" if workflow_enabled else "none")).lower()
+
+        if schedule_target not in {"none", "ecs", "workflow"}:
+            raise ValueError("schedule_target must be one of: none, ecs, workflow")
+
+        if schedule_target == "workflow" and not workflow_enabled:
+            raise ValueError("schedule_target='workflow' requires workflow_enabled=true")
+
+        if workflow_enabled and not enable_analytics:
+            raise ValueError("workflow_enabled=true requires enable_analytics=true")
+
         return cls(
             project_name=project_name,
             env_name=env_name,
@@ -83,11 +100,14 @@ class AppConfig:
             schedule_hour=str(data.get("schedule_hour", "9")),
             schedule_minute=str(data.get("schedule_minute", "0")),
             schedule_timezone=str(data.get("schedule_timezone", "UTC")),
-            schedule_enabled=bool(data.get("schedule_enabled", env_name == "prod")),
+            schedule_target=schedule_target,
             # analytics
             dataset_root=str(data.get("dataset_root", "avature")),
-            enable_analytics=bool(data.get("enable_analytics", True)),
+            enable_analytics=enable_analytics,
             enable_dashboard=bool(data.get("enable_dashboard", True)),
+            workflow_enabled=workflow_enabled,
+            workflow_timeout_minutes=int(data.get("workflow_timeout_minutes", 180)),
+            athena_poll_seconds=int(data.get("athena_poll_seconds", 15)),
             # operational thresholds
             empty_run_threshold=int(data.get("empty_run_threshold", 1)),
             job_detail_success_rate_threshold=float(data.get("job_detail_success_rate_threshold", 0.95)),

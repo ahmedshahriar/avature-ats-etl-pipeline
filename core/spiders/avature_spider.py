@@ -158,7 +158,7 @@ class AvatureSpider(scrapy.Spider):
                 next_link,
                 callback=self.parse_listing,
                 meta={
-                    "portal_key": response.meta.get("portal_key") or self._portal_key_from_url(link),
+                    "portal_key": response.meta.get("portal_key") or self._portal_key_from_url(next_link),
                     "input_seed_url": response.meta.get("input_seed_url"),
                     "request_kind": "pagination",
                 },

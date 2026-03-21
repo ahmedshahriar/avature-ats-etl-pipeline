@@ -1,4 +1,6 @@
 from aws_cdk import CfnOutput, Duration, Stack, TimeZone
+from aws_cdk import aws_cloudwatch as cloudwatch
+from aws_cdk import aws_cloudwatch_actions as cloudwatch_actions
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_ecr as ecr
@@ -8,6 +10,7 @@ from aws_cdk import aws_logs as logs
 from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_scheduler as scheduler
 from aws_cdk import aws_scheduler_targets as scheduler_targets
+from aws_cdk import aws_sns as sns
 from aws_cdk import aws_sqs as sqs
 from constructs import Construct
 
@@ -33,6 +36,7 @@ class AvatureEtlEcsScheduleStack(Stack):
         schedule_hour: str = "9",
         schedule_timezone: str = "UTC",
         schedule_enabled: bool = False,
+        notification_topic_arn: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, description=f"Avature ETL ECS and Scheduler Stack [{stage}]", **kwargs)
@@ -147,62 +151,103 @@ class AvatureEtlEcsScheduleStack(Stack):
         # resources like the DLQ -> notifications stack and SNS topic -> runtime alarms stack.
 
         # Standard SQS queue only (Scheduler DLQ does not support FIFO)
-        dlq = sqs.Queue(
-            self,
-            "SchedulerDlq",
-            queue_name=f"{prefix}-{stage}-scheduler-dlq",
-            retention_period=Duration.days(14) if is_prod else Duration.days(3),
-        )
+        notification_topic = None
+        if notification_topic_arn:
+            notification_topic = sns.Topic.from_topic_arn(
+                self,
+                "ImportedEcsScheduleAlarmTopic",
+                notification_topic_arn,
+            )
 
-        # Explicit execution role for Scheduler
-        scheduler_role = iam.Role(
-            self,
-            "SchedulerExecutionRole",
-            role_name=f"{prefix}-{stage}-scheduler-role",
-            assumed_by=iam.ServicePrincipal("scheduler.amazonaws.com"),  # ty: ignore[invalid-argument-type]
-            description="Execution role for EventBridge Scheduler to run ECS Fargate task",
-        )
+        self.dlq = None
+        self.dlq_alarm = None
 
-        # Allow Scheduler to send failed invocations to DLQ
-        dlq.grant_send_messages(scheduler_role)
+        if schedule_enabled:
+            dlq = sqs.Queue(
+                self,
+                "SchedulerDlq",
+                queue_name=f"{prefix}-{stage}-scheduler-dlq",
+                retention_period=Duration.days(14) if is_prod else Duration.days(3),
+            )
 
-        # EventBridge Scheduler target:
-        # - public subnets, assign public IP
-        # - no retries + DLQ
-        # - explicit task_count
-        target = scheduler_targets.EcsRunFargateTask(
-            cluster,
-            task_definition=task_definition,
-            role=scheduler_role,  # ty: ignore[invalid-argument-type]
-            task_count=1,
-            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
-            assign_public_ip=True,
-            security_groups=[task_sg],
-            enable_ecs_managed_tags=True,
-            propagate_tags=True,
-            dead_letter_queue=dlq,
-            # retry_attempts=0: safer default for batch scraper to avoid duplicate side effects
-            retry_attempts=0,
-        )
+            # Explicit execution role for Scheduler
+            scheduler_role = iam.Role(
+                self,
+                "SchedulerExecutionRole",
+                role_name=f"{prefix}-{stage}-scheduler-role",
+                assumed_by=iam.ServicePrincipal("scheduler.amazonaws.com"),  # ty: ignore[invalid-argument-type]
+                description="Execution role for EventBridge Scheduler to run ECS Fargate task",
+            )
 
-        sched = scheduler.Schedule(
-            self,
-            "DailySchedule",
-            schedule_name=f"{prefix}-{stage}-daily-schedule",
-            description=f"Daily schedule for Avature ETL ECS batch task [{stage}]",
-            enabled=schedule_enabled,
-            schedule=scheduler.ScheduleExpression.cron(
-                minute=schedule_minute,
-                hour=schedule_hour,
-                month="*",
-                week_day="*",
-                year="*",
-                # https://github.com/aws/aws-cdk/issues/21181#issuecomment-2941360602
-                time_zone=TimeZone.of(schedule_timezone),
-            ),
-            time_window=scheduler.TimeWindow.off(),
-            target=target,  # ty: ignore[invalid-argument-type]
-        )
+            # Allow Scheduler to send failed invocations to DLQ
+            dlq.grant_send_messages(scheduler_role)
+
+            # EventBridge Scheduler target:
+            # - public subnets, assign public IP
+            # - no retries + DLQ
+            # - explicit task_count
+            target = scheduler_targets.EcsRunFargateTask(
+                cluster,
+                task_definition=task_definition,
+                role=scheduler_role,  # ty: ignore[invalid-argument-type]
+                task_count=1,
+                vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
+                assign_public_ip=True,
+                security_groups=[task_sg],
+                enable_ecs_managed_tags=True,
+                propagate_tags=True,
+                dead_letter_queue=dlq,
+                # retry_attempts=0: safer default for batch scraper to avoid duplicate side effects
+                retry_attempts=0,
+            )
+
+            sched = scheduler.Schedule(
+                self,
+                "DailySchedule",
+                schedule_name=f"{prefix}-{stage}-daily-schedule",
+                description=f"Daily schedule for Avature ETL ECS batch task [{stage}]",
+                enabled=True,
+                schedule=scheduler.ScheduleExpression.cron(
+                    minute=schedule_minute,
+                    hour=schedule_hour,
+                    month="*",
+                    week_day="*",
+                    year="*",
+                    # https://github.com/aws/aws-cdk/issues/21181#issuecomment-2941360602
+                    time_zone=TimeZone.of(schedule_timezone),
+                ),
+                time_window=scheduler.TimeWindow.off(),
+                target=target,  # ty: ignore[invalid-argument-type]
+            )
+
+            if notification_topic is not None:
+                dlq_alarm = cloudwatch.Alarm(
+                    self,
+                    "SchedulerDlqVisibleMessagesAlarm",
+                    alarm_name=f"{prefix}-{stage}-scheduler-dlq-visible-messages",
+                    alarm_description="ECS schedule DLQ has one or more failed invocations waiting for investigation.",
+                    metric=dlq.metric_approximate_number_of_messages_visible(
+                        period=Duration.minutes(5),
+                        statistic="Maximum",
+                    ),
+                    threshold=1,
+                    evaluation_periods=1,
+                    datapoints_to_alarm=1,
+                    comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                    treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+                )
+                dlq_alarm.add_alarm_action(cloudwatch_actions.SnsAction(notification_topic))  # ty: ignore[invalid-argument-type]
+                self.dlq_alarm = dlq_alarm
+                CfnOutput(self, "SchedulerDlqAlarmName", value=dlq_alarm.alarm_name)
+
+            CfnOutput(self, "ScheduleName", value=sched.schedule_name)
+            CfnOutput(self, "ScheduleArn", value=sched.schedule_arn)
+            CfnOutput(self, "ScheduleTimezone", value=schedule_timezone)
+            CfnOutput(self, "ScheduleExpression", value=f"cron({schedule_minute} {schedule_hour} ? * * *)")
+            CfnOutput(self, "SchedulerDlqUrl", value=dlq.queue_url)
+            CfnOutput(self, "SchedulerExecutionRoleArn", value=scheduler_role.role_arn)
+
+            self.dlq = dlq
 
         # Outputs for easy reference in deploy time and tests
         CfnOutput(self, "ClusterName", value=cluster.cluster_name)
@@ -212,17 +257,10 @@ class AvatureEtlEcsScheduleStack(Stack):
         CfnOutput(self, "TaskRoleArn", value=task_role.role_arn)
         CfnOutput(self, "ImageTag", value=image_tag)
         CfnOutput(self, "Stage", value=stage)
-        CfnOutput(self, "ScheduleName", value=sched.schedule_name)
-        CfnOutput(self, "ScheduleArn", value=sched.schedule_arn)
-        CfnOutput(self, "ScheduleTimezone", value=schedule_timezone)
         CfnOutput(self, "ScheduleEnabled", value="true" if schedule_enabled else "false")
-        CfnOutput(self, "ScheduleExpression", value=f"cron({schedule_minute} {schedule_hour} ? * * *)")
-        CfnOutput(self, "SchedulerDlqUrl", value=dlq.queue_url)
-        CfnOutput(self, "SchedulerExecutionRoleArn", value=scheduler_role.role_arn)
 
         self.cluster = cluster
         self.task_definition = task_definition
         self.task_security_group = task_sg
         self.execution_role = execution_role
         self.task_role = task_role
-        self.dlq = dlq

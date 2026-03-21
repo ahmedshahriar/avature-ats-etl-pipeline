@@ -13,12 +13,21 @@ alert_email: null
 schedule_hour: "9"
 schedule_minute: "0"
 schedule_timezone: "UTC"
-schedule_enabled: false
+# schedule owner:
+#   none      -> manual only
+#   ecs       -> schedule ECS directly (no silver auto-promotion)
+#   workflow  -> schedule Step Functions (recommended; silver auto-promotion included)
+schedule_target: "none"
 
 # analytics and dashboard settings
 dataset_root: "avature"
 enable_analytics: true
 enable_dashboard: true
+
+# step function
+workflow_enabled: true
+workflow_timeout_minutes: 180
+athena_poll_seconds: 15
 
 # Optional: Enable Container Insights for better monitoring (note: may increase CloudWatch costs)
 container_insights_mode: "disabled"

@@ -1,12 +1,12 @@
 -- Incremental daily load into the curated silver jobs table.
 -- Purpose:
---   - append a single run_date partition from bronze into the silver Parquet dataset
---   - support routine daily promotion after the initial CTAS bootstrap
+--   - append valid bronze rows into the silver Parquet dataset for one run_date partition
+--   - stay safe to rerun by skipping rows already present in silver for the same run_date/job_hash
 --
 -- Execution guidance:
---   - replace __TARGET_RUN_DATE__ with the specific partition date before execution
---   - run this only after the silver table has already been created
---   - reruns for the same date should be handled carefully to avoid duplicate inserts
+--   - the saved Athena named query resolves __RUN_DATE_FILTER__ to CAST(current_date AS varchar)
+--   - the Step Functions manual override path injects the requested run_date
+--   - reruns for the same run_date do not duplicate rows because of the anti-join
 --
 -- Data quality rules:
 --   - only records marked as valid in bronze are inserted
@@ -15,27 +15,32 @@
 --   - run_date is the partition column and must remain the final selected column
 
 INSERT INTO __DATABASE_NAME__.silver_jobs_curated
-SELECT job_hash,
-       source_url,
-       raw_source_url,
-       canonical_source_url,
-       portal_key,
-       run_id,
-       scraped_at,
-       input_seed_url,
-       job_id,
-       title,
-       company,
-       locations,
-       posted_date,
-       remote,
-       employment_type,
-       career_area,
-       ref_number,
-       description_text,
-       apply_url,
-       validation_warnings,
-       run_date
-FROM __DATABASE_NAME__.bronze_jobs_raw
-WHERE record_status = 'valid'
-  AND run_date = '__TARGET_RUN_DATE__';
+SELECT
+    b.job_hash,
+    b.source_url,
+    b.raw_source_url,
+    b.canonical_source_url,
+    b.portal_key,
+    b.run_id,
+    b.scraped_at,
+    b.input_seed_url,
+    b.job_id,
+    b.title,
+    b.company,
+    b.locations,
+    b.posted_date,
+    b.remote,
+    b.employment_type,
+    b.career_area,
+    b.ref_number,
+    b.description_text,
+    b.apply_url,
+    b.validation_warnings,
+    b.run_date
+FROM __DATABASE_NAME__.bronze_jobs_raw b
+LEFT JOIN __DATABASE_NAME__.silver_jobs_curated s
+    ON s.run_date = b.run_date
+   AND s.job_hash = b.job_hash
+WHERE b.record_status = 'valid'
+  AND b.run_date = __RUN_DATE_FILTER__
+  AND s.job_hash IS NULL;
