@@ -21,6 +21,11 @@ image_tag = str(app.node.try_get_context("imageTag") or os.getenv("IMAGE_TAG", "
 
 cfg = AppConfig.load(deploy_env)
 
+# workflow schedule (w/step function) is only enabled if workflow is enabled,
+# but ECS schedule can be independently toggled on/off for testing or if users prefer it over workflow.
+ecs_schedule_enabled = cfg.schedule_target == "ecs"
+workflow_schedule_enabled = cfg.schedule_target == "workflow"
+
 aws_env = Environment(
     account=os.getenv("CDK_DEFAULT_ACCOUNT"),
     region=os.getenv("CDK_DEFAULT_REGION"),
@@ -28,6 +33,16 @@ aws_env = Environment(
 
 for k, v in cfg.tags.items():
     Tags.of(app).add(k, v)
+
+base_stack = AvatureEtlBaseStack(
+    app,
+    f"{cfg.project_name}-base-{cfg.env_name}",
+    prefix=cfg.project_name,
+    stage=cfg.env_name,
+    bucket_suffix=cfg.bucket_suffix,
+    ddb_table_suffix=cfg.ddb_table_suffix,
+    env=aws_env,
+)
 
 # Shared ECR repository for build-once/promote-many
 ecr_stack = AvatureEtlEcrStack(
@@ -38,13 +53,12 @@ ecr_stack = AvatureEtlEcrStack(
     env=aws_env,
 )
 
-base_stack = AvatureEtlBaseStack(
+notifications_stack = AvatureEtlNotificationsStack(
     app,
-    f"{cfg.project_name}-base-{cfg.env_name}",
+    f"{cfg.project_name}-notifications-{cfg.env_name}",
     prefix=cfg.project_name,
     stage=cfg.env_name,
-    bucket_suffix=cfg.bucket_suffix,
-    ddb_table_suffix=cfg.ddb_table_suffix,
+    alert_email=cfg.alert_email,
     env=aws_env,
 )
 
@@ -72,17 +86,8 @@ ecs_stack = AvatureEtlEcsScheduleStack(
     schedule_hour=cfg.schedule_hour,
     schedule_minute=cfg.schedule_minute,
     schedule_timezone=cfg.schedule_timezone,
-    schedule_enabled=cfg.schedule_enabled,
-    env=aws_env,
-)
-
-notifications_stack = AvatureEtlNotificationsStack(
-    app,
-    f"{cfg.project_name}-notifications-{cfg.env_name}",
-    prefix=cfg.project_name,
-    stage=cfg.env_name,
-    scheduler_dlq=ecs_stack.dlq,
-    alert_email=cfg.alert_email,
+    schedule_enabled=ecs_schedule_enabled,
+    notification_topic_arn=notifications_stack.topic.topic_arn if "notifications_stack" in locals() else None,
     env=aws_env,
 )
 
@@ -136,9 +141,10 @@ if cfg.workflow_enabled and analytics_stack is not None:
         analytics_database_name=analytics_stack.database_name,
         athena_workgroup_name=analytics_stack.workgroup_name,
         notification_topic_arn=notifications_stack.topic.topic_arn if notifications_stack is not None else None,
-        schedule_enabled=True,
+        schedule_enabled=workflow_schedule_enabled,
         schedule_hour=cfg.schedule_hour,
         schedule_minute=cfg.schedule_minute,
+        schedule_timezone=cfg.schedule_timezone,
         athena_poll_seconds=cfg.athena_poll_seconds,
         workflow_timeout_minutes=cfg.workflow_timeout_minutes,
         env=aws_env,
@@ -157,7 +163,6 @@ if cfg.enable_dashboard:
 
 ecs_stack.add_dependency(base_stack)
 ecs_stack.add_dependency(ecr_stack)
-notifications_stack.add_dependency(ecs_stack)
 runtime_alarm_stack.add_dependency(notifications_stack)
 
 if analytics_stack is not None:
