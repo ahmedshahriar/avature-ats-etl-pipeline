@@ -9,13 +9,15 @@ A Scrapy-based end-to-end ETL pipeline for crawling Avature career portals (job 
 Engineered for reliable cloud execution, this project features:
 
 - **Infrastructure as Code (IaC)** provisioning managed entirely via AWS CDK
-- **Scheduled serverless execution** using EventBridge to trigger ECS Fargate tasks
-- **Scalable data lake storage** writing scraped payloads and metrics summaries directly to S3
+- **Workflow orchestration** with EventBridge Scheduler, Step Functions and ECS Fargate
+- **Scalable data lake storage** writing bronze artifacts and run metadata to S3
 - **Cross-run idempotency & deduplication** powered by DynamoDB
 - **Data quality controls** with validation, warnings, and quarantine for invalid records
-- **Operational observability** with CloudWatch logging, EMF metrics and alarms, SNS alerts for failed tasks/runs
+- **Curated analytics layer** using Athena + Glue with bronze / silver / gold modeling
+- **Operational observability** with CloudWatch logs, EMF metrics, alarms, and SNS alerts
 - **Fault tolerance** using SQS Dead Letter Queue (DLQ) for failed invocations
-- **Automated CI/CD** using GitHub Actions with secure AWS OIDC integration
+- **Cost guardrails** with Athena scan limits and AWS Budget alerts
+- **Automated CI/CD** using GitHub Actions with AWS OIDC and AWS ECR
 
 ---
 
@@ -96,7 +98,7 @@ s3://<S3_BUCKET_NAME>/avature/ops/portal_summaries/run_date=<YYYY-MM-DD>/run_id=
 
 - `jobs.jsonl` — exported valid job records
 - `metrics.json` — full Scrapy stats snapshot plus custom crawl/pipeline metrics
-- `run_manifest.json` — run lineage summary, counts, timestamps, input fingerprint, and artifact URIs
+- `run_manifest.json` — run lineage summary (run metadata), counts, timestamps, input fingerprint, and artifact URIs
 - `portal_summary.jsonl` — portal-level crawl breakdowns and completeness metrics
 - `quarantine.jsonl` — invalid records that failed hard validation checks
 
@@ -119,7 +121,7 @@ s3://<S3_BUCKET_NAME>/avature/ops/portal_summaries/run_date=<YYYY-MM-DD>/run_id=
 
 ### Quality and observability metrics
 
-- `crawl/job_detail_success_rate`
+- `crawl/job_detail_success_rate` - successful job-detail parses divided by job-detail requests
 - `crawl/job_detail_parse_exception_total`
 - `crawl/job_detail_parse_failure_total` (funnel-loss approximation)
 - per-field completeness percentages from the pipeline
@@ -157,7 +159,7 @@ This gives the pipeline a clean separation between:
 
 ## Architecture
 
-<img width="3959" height="1218" alt="diagram" src="https://github.com/user-attachments/assets/1077e404-408b-4cf9-b148-d493681fc6e6" />
+<img width="4544" height="2690" alt="aws-ETL-pipeline-diagram" src="https://github.com/user-attachments/assets/95f6dda3-fdcc-403f-a81b-f2a40777197d" />
 
 Scraper-side ownership is intentionally split as follows:
 
@@ -189,6 +191,7 @@ Scraper-side ownership is intentionally split as follows:
 │   │   ├── dev.yaml
 │   │   └── prod.yaml
 │   ├── stacks/             # CDK stacks for modular infrastructure components
+│   ├── sql/                # Athena bootstrap queries and named queries
 │   ├── tests/              # Unit tests for CDK constructs
 │   ├── app.py              # Main CDK app entry point
 │   └── bootstrap_app.py    # CDK app for GitHub OIDC bootstrap stack
@@ -240,6 +243,7 @@ Add the target Avature career portal listing URLs (one per line) to `seed_urls.c
 Example (One URL per line):
 
 ```csv
+url
 https://example.avature.net/careers/SearchJobs
 https://another-company.avature.net/en_US/careers/SearchJobs
 ```
@@ -323,11 +327,14 @@ docker run --rm \
 This project runs on AWS as a **containerized batch scraping workload**.
 Infrastructure is provisioned with **AWS CDK** from the `infra/` directory and organized into modular stacks across environments such as `dev` and `prod`.
 
-- **ECR stack** — hosts the scraper container image in Amazon ECR with immutable tags and image scanning on push. Shared container registry across environments.
-- **Base stack** — provisions the S3 output bucket, DynamoDB deduplication table, and CloudWatch log group
-- **ECS & Scheduler stack** — runs the scraper as an **ARM64 ECS Fargate task** and configures **EventBridge Scheduler** for scheduled execution
-- **Notifications stack** — creates the SNS topic and DLQ alarming path for failed scheduler invocations
-- **Runtime alarm stack** — defines operational alarms for scraper failures and runtime visibility
+- **ECR stack** — shared Amazon ECR repository with immutable tags and image scanning
+- **Base stack** — S3 output bucket, DynamoDB dedupe table, and CloudWatch log group
+- **ECS stack** — ARM64 ECS Fargate task definition and runtime for the scraper
+- **Workflow stack** — EventBridge Scheduler, Step Functions orchestration for daily runs and manual overrides
+- **Notifications stack** — SNS topic for operational alerts
+- **Runtime alarm stack** — CloudWatch alarms for scraper and workflow health
+- **Analytics stack** — Glue database, Athena workgroup, and named queries for bronze / silver / gold analytics
+- **Cost guardrails stack** — AWS Budget alerting for spend visibility
 
 ### Environment-specific configuration
 
@@ -338,15 +345,17 @@ Environment-specific settings are defined in:
 
 These files control settings such as:
 
-- task sizing
-- schedule enablement and cron configuration
+- ECS task sizing
+- schedule ownership via `schedule_target`
 - alert routing
+- Athena scan guardrails
+- monthly budget alerting
+- workflow / ECS timeout behavior
 - scraper runtime parameters
-- environment-specific operational behavior
 
 At deploy time, these values are injected into the ECS task and supporting AWS resources.
 
-### Manual AWS setup
+### AWS setup
 
 If you want to deploy this project directly from your machine, make sure you have the following available locally:
 
@@ -372,7 +381,7 @@ cdk bootstrap aws://<ACCOUNT_ID>/<AWS_REGION>
 
 This sets up the CDK toolkit resources required for deployment in the target AWS account and region.
 
-### Manual deployment
+### AWS deployment
 
 This project’s ECS task pulls the scraper image from **Amazon ECR**, so a manual deployment has two parts:
 
@@ -502,29 +511,37 @@ For `prod`:
 
 The repository follows a **build once, promote many** workflow:
 
-1. a push to `main` builds the Docker image and deploys **dev**
+1. push to `main` builds the image and deploys `dev`
 2. the image is tagged with the full Git commit SHA
-3. after validation, to deploy to `prod`, trigger the GitHub Actions workflow dispatch and provide the image tag that was deployed to `dev` (the full Git commit SHA).
+3. production deployment promotes the same tested image tag (triggered via GitHub Actions workflow dispatch)
 
-This ensures that the exact same tested artifact is promoted to production, following best practices for immutable infrastructure and artifact promotion.
+This keeps deployments immutable and avoids rebuilding different artifacts per environment.
 
 
 ### Cross-run deduplication via DynamoDB
 
-**Why**: Scrapy’s in-memory/JobDir dedupe only prevents duplicates *within a run*. DynamoDB provides **cross-run idempotency**.
-
-This project adds a DynamoDB deduplication layer for AWS runs:
+Scrapy’s built-in dedupe is run-local only. For AWS runs, this project adds a DynamoDB-backed idempotency layer:
 
 - each job gets a stable `job_hash`
-- the pipeline performs a conditional write to DynamoDB before accepting the item
-- if the hash already exists, the item is treated as already seen and dropped
-- TTL is used so the dedupe table does not grow forever
+- a conditional write is used before accepting the item
+- previously seen hashes are dropped
+- TTL prevents unbounded table growth
 
 ### Operational notes
 
-* The ECS/Fargate task is explicitly configured for `ARM64` to optimize cost/performance and support Apple Silicon development. If you build images manually, publish either an `ARM64` image or a multi-arch image that includes `linux/arm64`. By default, ECS/Fargate tasks run on `X86_64` unless `runtimePlatform` is explicitly set.
-* The scheduler is configurable per environment; in `dev`, scheduled execution is disabled by default.
-* The ECS stack currently looks up the **default VPC**, so the target AWS account must have one available unless the infrastructure code is changed.
+* ECS/Fargate is configured for `ARM64` for cost/performance efficiency.
+* In production, the **workflow** owns the schedule (`schedule_target: workflow`).
+* The ECS stack uses the default VPC, so the target AWS account must have one unless the infrastructure is changed.
+* Athena bootstrap queries must be executed once after deploy before the analytics layer is live.
+
+> Note: If you build images manually, publish either an `ARM64` image or a multi-arch image that includes `linux/arm64`.
+> By default, ECS/Fargate tasks run on `X86_64` unless `runtimePlatform` is explicitly set.
+
+## Operations docs
+
+For Athena bootstrap, manual workflow runs, alert handling, and rollback basics, see:
+
+- `docs/runbooks/avature-aws-runbook.md`
 
 ## Screenshots
 
