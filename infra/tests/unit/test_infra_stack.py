@@ -8,6 +8,7 @@ import pytest
 from aws_cdk.assertions import Template
 from stacks.analytics_stack import AvatureEtlAnalyticsStack
 from stacks.base_stack import AvatureEtlBaseStack
+from stacks.cost_guardrails_stack import AvatureEtlCostGuardrailsStack
 from stacks.dashboard_stack import AvatureEtlDashboardStack
 from stacks.ecr_stack import AvatureEtlEcrStack
 from stacks.ecs_schedule_stack import AvatureEtlEcsScheduleStack
@@ -103,7 +104,7 @@ def runtime_alarm_stack(app, aws_env, notifications_stack):
         "avature-etl-runtime-alarms",
         prefix="avature-etl",
         stage="dev",
-        topic=notifications_stack.topic,  # type: ignore[arg-type]
+        topic=notifications_stack.topic,
         spider_name="avature",
         env=aws_env,
     )
@@ -119,6 +120,7 @@ def analytics_stack(app, aws_env, base_stack):
         stage="dev",
         outputs_bucket=base_stack.outputs_bucket,
         dataset_root="avature",
+        athena_bytes_scanned_cutoff_mb=512,
         env=aws_env,
     )
 
@@ -156,6 +158,20 @@ def workflow_stack(app, aws_env, ecs_stack, analytics_stack, notifications_stack
         schedule_timezone="UTC",
         athena_poll_seconds=15,
         workflow_timeout_minutes=180,
+        ecs_task_timeout_minutes=150,
+        env=aws_env,
+    )
+
+
+@pytest.fixture
+def cost_guardrails_stack(app, aws_env):
+    return AvatureEtlCostGuardrailsStack(
+        app,
+        "avature-etl-cost-guardrails",
+        prefix="avature-etl",
+        stage="dev",
+        monthly_budget_usd=10,
+        alert_email="alerts@example.com",
         env=aws_env,
     )
 
@@ -228,6 +244,19 @@ def test_ecs_stack_has_no_schedule_when_disabled(ecs_stack):
     template.resource_count_is("AWS::SQS::Queue", 0)
 
 
+def test_ecs_execution_role_uses_no_managed_policy(ecs_stack):
+    template = Template.from_stack(ecs_stack)
+    roles = template.find_resources("AWS::IAM::Role")
+
+    execution_role_props = next(
+        resource["Properties"]
+        for resource in roles.values()
+        if resource["Properties"].get("RoleName") == "avature-etl-dev-ecs-execution-role"
+    )
+
+    assert "ManagedPolicyArns" not in execution_role_props
+
+
 def test_notifications_stack_resources_created(notifications_stack):
     template = Template.from_stack(notifications_stack)
 
@@ -285,6 +314,9 @@ def test_analytics_stack_resources_created(analytics_stack):
         {
             "Name": "avature-etl-dev-athena",
             "State": "ENABLED",
+            "WorkGroupConfiguration": {
+                "BytesScannedCutoffPerQuery": 536870912,
+            },
         },
     )
 
@@ -358,3 +390,23 @@ def test_workflow_stack_resources_created(workflow_stack):
         assert props["ComparisonOperator"] == "GreaterThanOrEqualToThreshold"
         assert props["Threshold"] == 1
         assert len(props["AlarmActions"]) == 1
+
+
+def test_cost_guardrails_stack_resources_created(cost_guardrails_stack):
+    template = Template.from_stack(cost_guardrails_stack)
+
+    template.resource_count_is("AWS::Budgets::Budget", 1)
+
+
+def test_cost_guardrails_stack_skips_budget_without_email(app, aws_env):
+    stack = AvatureEtlCostGuardrailsStack(
+        app,
+        "avature-etl-cost-guardrails-no-email",
+        prefix="avature-etl",
+        stage="dev",
+        monthly_budget_usd=10,
+        alert_email=None,
+        env=aws_env,
+    )
+    template = Template.from_stack(stack)
+    template.resource_count_is("AWS::Budgets::Budget", 0)

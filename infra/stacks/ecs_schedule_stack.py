@@ -82,20 +82,37 @@ class AvatureEtlEcsScheduleStack(Stack):
         # ---- Roles ----
         # ServicePrincipal implements IPrincipal and Role implements IRole at runtime;
         # ty uses nominal subtyping and doesn't recognise CDK's structural interfaces.
-        execution_role: iam.IRole = iam.Role(  # ty: ignore[invalid-assignment]
+        execution_role = iam.Role(
             self,
             "ExecutionRole",
             role_name=f"{prefix}-{stage}-ecs-execution-role",
             assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"),  # ty: ignore[invalid-argument-type]
-            description="ECS task execution role for pulling images and writing logs",
-            managed_policies=[
-                # AmazonECSTaskExecutionRolePolicy includes logs:CreateLogStream and logs:PutLogEvents
-                # Fargate agent uses this role to ship container stdout/stderr to CloudWatch via the awslogs driver.
-                iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AmazonECSTaskExecutionRolePolicy")
-            ],
+            description="Least-privilege ECS task execution role for pulling images and writing logs",
         )
 
-        task_role: iam.IRole = iam.Role(  # ty: ignore[invalid-assignment]
+        # ECR image pull permissions scoped to this repository
+        repository.grant_pull(execution_role)
+
+        # AmazonECSTaskExecutionRolePolicy includes logs:CreateLogStream and logs:PutLogEvents
+        # Fargate agent uses this role to ship container stdout/stderr to CloudWatch via the awslogs driver.
+
+        # ECR auth token must remain '*' per AWS API design
+        execution_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["ecr:GetAuthorizationToken"],
+                resources=["*"],
+            )
+        )
+
+        # awslogs driver permissions scoped to this log group
+        execution_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["logs:CreateLogStream", "logs:PutLogEvents"],
+                resources=[f"{ecs_log_group.log_group_arn}:*"],
+            )
+        )
+
+        task_role = iam.Role(
             self,
             "TaskRole",
             role_name=f"{prefix}-{stage}-ecs-task-role",
@@ -115,8 +132,8 @@ class AvatureEtlEcsScheduleStack(Stack):
             family=f"{prefix}-{stage}-task",
             cpu=ecs_task_cpu,
             memory_limit_mib=ecs_task_memory,
-            execution_role=execution_role,
-            task_role=task_role,
+            execution_role=execution_role,  # ty: ignore[invalid-argument-type]
+            task_role=task_role,  # ty: ignore[invalid-argument-type]
             runtime_platform=ecs.RuntimePlatform(
                 operating_system_family=ecs.OperatingSystemFamily.LINUX,
                 cpu_architecture=ecs.CpuArchitecture.ARM64,
