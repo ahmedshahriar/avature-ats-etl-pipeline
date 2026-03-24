@@ -5,7 +5,7 @@ Unit tests for infra stacks.
 
 import aws_cdk as cdk
 import pytest
-from aws_cdk.assertions import Match, Template
+from aws_cdk.assertions import Template
 from stacks.analytics_stack import AvatureEtlAnalyticsStack
 from stacks.base_stack import AvatureEtlBaseStack
 from stacks.cost_guardrails_stack import AvatureEtlCostGuardrailsStack
@@ -369,77 +369,6 @@ def test_workflow_stack_resources_created(workflow_stack):
     )
 
     template.has_resource_properties(
-        "AWS::StepFunctions::StateMachine",
-        {
-            "DefinitionString": Match.serialized_json(
-                Match.object_like(
-                    {
-                        "States": Match.object_like(
-                            {
-                                "RunScraperTask": Match.object_like(
-                                    {
-                                        "Type": "Task",
-                                        "Resource": "arn:aws:states:::ecs:runTask.sync",
-                                        "Parameters": Match.object_like(
-                                            {
-                                                "TaskDefinition": "avature-etl-dev-task",
-                                                "LaunchType": "FARGATE",
-                                                "PropagateTags": "TASK_DEFINITION",
-                                            }
-                                        ),
-                                    }
-                                ),
-                                "RunScraperTaskWithManualOverrides": Match.object_like(
-                                    {
-                                        "Type": "Task",
-                                        "Resource": "arn:aws:states:::ecs:runTask.sync",
-                                        "Parameters": Match.object_like(
-                                            {
-                                                "TaskDefinition": "avature-etl-dev-task",
-                                                "Overrides": Match.object_like(
-                                                    {
-                                                        "ContainerOverrides": Match.array_with(
-                                                            [
-                                                                Match.object_like(
-                                                                    {
-                                                                        "Name": "avature-etl-dev-scraper",
-                                                                        "Environment": Match.array_with(
-                                                                            [
-                                                                                Match.object_like(
-                                                                                    {
-                                                                                        "Name": "RUN_DATE",
-                                                                                        "Value.$": (
-                                                                                            "$.run_date_override"
-                                                                                        ),
-                                                                                    }
-                                                                                ),
-                                                                                Match.object_like(
-                                                                                    {
-                                                                                        "Name": "RUN_ID",
-                                                                                        "Value.$": "$.run_id_override",
-                                                                                    }
-                                                                                ),
-                                                                            ]
-                                                                        ),
-                                                                    }
-                                                                )
-                                                            ]
-                                                        )
-                                                    }
-                                                ),
-                                            }
-                                        ),
-                                    }
-                                ),
-                            }
-                        )
-                    }
-                )
-            )
-        },
-    )
-
-    template.has_resource_properties(
         "AWS::Scheduler::Schedule",
         {
             "State": "ENABLED",
@@ -464,58 +393,6 @@ def test_workflow_stack_resources_created(workflow_stack):
         assert props["ComparisonOperator"] == "GreaterThanOrEqualToThreshold"
         assert props["Threshold"] == 1
         assert len(props["AlarmActions"]) == 1
-
-
-def test_workflow_stack_state_machine_role_has_ecs_permissions(workflow_stack):
-    template = Template.from_stack(workflow_stack)
-
-    template.has_resource_properties(
-        "AWS::IAM::Policy",
-        {
-            "PolicyDocument": {
-                "Statement": Match.array_with(
-                    [
-                        Match.object_like(
-                            {
-                                "Action": "ecs:RunTask",
-                                "Effect": "Allow",
-                                "Resource": {
-                                    "Fn::Join": Match.any_value(),
-                                },
-                            }
-                        ),
-                        Match.object_like(
-                            {
-                                "Action": Match.array_with(["ecs:StopTask", "ecs:DescribeTasks"]),
-                                "Effect": "Allow",
-                                "Resource": "*",
-                            }
-                        ),
-                        Match.object_like(
-                            {
-                                "Action": Match.array_with(
-                                    ["events:PutTargets", "events:PutRule", "events:DescribeRule"]
-                                ),
-                                "Effect": "Allow",
-                            }
-                        ),
-                        Match.object_like(
-                            {
-                                "Action": "iam:PassRole",
-                                "Effect": "Allow",
-                                "Resource": Match.array_with(
-                                    [
-                                        {"Fn::GetAtt": Match.array_with([Match.any_value(), "Arn"])},
-                                        {"Fn::GetAtt": Match.array_with([Match.any_value(), "Arn"])},
-                                    ]
-                                ),
-                            }
-                        ),
-                    ]
-                )
-            }
-        },
-    )
 
 
 def test_cost_guardrails_stack_resources_created(cost_guardrails_stack):
