@@ -45,21 +45,22 @@ tags:
   Application: "avature-ats-etl"
 
 scraper_runtime:
-  concurrent_requests: 8
-  concurrent_requests_per_domain: 4
-  download_delay: 1.0
-  download_timeout: 30
+  concurrent_requests: 64
+  concurrent_requests_per_domain: 2
+  download_delay: 1.0 # overrides by AutoThrottle if enabled
+  # effective_delay = response_latency / AUTOTHROTTLE_TARGET_CONCURRENCY
+  download_timeout: 20
 
   # AutoThrottle tuning
   autothrottle_enabled: true
   autothrottle_start_delay: 1.0
-  autothrottle_max_delay: 20.0
-  autothrottle_target_concurrency: 1.0
-  retry_times: 4
+  autothrottle_max_delay: 30.0
+  autothrottle_target_concurrency: 2.0
+  retry_times: 3
 
   # Standard logging for prod to save CloudWatch costs
-  log_level: "INFO"
-  logstats_interval: 30.0
+  log_level: "WARNING"
+  logstats_interval: 60.0
 
   dynamodb_ttl_days: 60
   ddb_dedupe_fail_open: false

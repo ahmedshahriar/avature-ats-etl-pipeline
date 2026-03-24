@@ -118,9 +118,7 @@ DEFAULT_REQUEST_HEADERS = {
     "Cache-Control": "no-cache",
     "Pragma": "no-cache",
     "Priority": "u=0, i",
-    "Sec-CH-UA": '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
-    "Sec-CH-UA-Mobile": "?0",
-    "Sec-CH-UA-Platform": '"macOS"',
+    # Sec-CH-UA* intentionally absent — set per-request by RandomUserAgentMiddleware
     "Sec-Fetch-Dest": "document",
     "Sec-Fetch-Mode": "navigate",
     "Sec-Fetch-Site": "none",
@@ -147,9 +145,10 @@ RETRY_HTTP_CODES = [406, 408, 429, 500, 502, 503, 504, 522, 524]
 
 # See https://docs.scrapy.org/en/latest/topics/downloader-middleware.html#httpcache-middleware-settings
 # random UA
+# DefaultHeadersMiddleware is also at priority 400.
 DOWNLOADER_MIDDLEWARES = {
     "scrapy.downloadermiddlewares.useragent.UserAgentMiddleware": None,  # disable default
-    "core.middlewares.RandomUserAgentMiddleware": 400,
+    "core.middlewares.RandomUserAgentMiddleware": 410,
 }
 
 # Enable and configure HTTP caching (disabled by default)

@@ -10,28 +10,27 @@ It covers:
 - alert handling
 - rollback / validation
 
-It does **not** repeat project overview, local setup, Docker usage, or detailed deployment steps from the README.
+It does **not** repeat project overview, local setup, Docker usage, or detailed deployment steps from the [README](../../README.md).
 
 ---
 
 ## 1. One-time Athena bootstrap
 
-CDK creates the Glue database, Athena workgroup, and saved Athena queries, but it does **not** execute the SQL
-automatically.
+CDK creates the Glue database, Athena workgroup, and saved Athena queries, but it does **not** execute the SQL automatically.
 
 Run these saved Athena queries in this order:
 
 1. `01_bronze_jobs_raw`
-2. `02_ops_portal_summary_raw`
+2. `02_ops_portal_summary_raw` (optional for ops analytics)
 3. `03_silver_jobs_curated_ctas`
 4. `05_gold_portal_daily_summary`
 
 ### Notes
 
-- `03_silver_jobs_curated_ctas` is a **one-time initialization** query.
+- `03_silver_jobs_curated_ctas` is a **one-time initialization** query that creates `silver_jobs_curated`.
 - The silver CTAS `external_location` must be empty before the first run.
 - Daily operation should use `04_silver_jobs_incremental_insert` through the workflow.
-- The gold layer is a **view**, so it does not need a separate daily refresh job.
+- `05_gold_portal_daily_summary` creates a **view** on top of silver, so it does not need a separate daily refresh job.
 
 ---
 
@@ -72,7 +71,7 @@ Use an empty input object:
 {}
 ````
 
-### Manual backfill / rerun
+### Manual rerun
 
 Use both override values together:
 
@@ -203,9 +202,16 @@ Check:
 
 * Athena query execution status
 * bronze data exists for the expected `run_date`
-* silver table exists
+* `silver_jobs_curated` table exists
 * workgroup result location is valid
 * query did not exceed the bytes-scanned cutoff
+
+Common causes:
+
+* `silver_jobs_curated` was never created because `03_silver_jobs_curated_ctas` was not run yet
+* bootstrap queries were run out of order
+* the expected `run_date` has no valid bronze rows to promote
+* the query hit the Athena bytes-scanned cutoff
 
 ### Bootstrap / CTAS issue
 
@@ -240,7 +246,7 @@ After deploy, activate the user-defined cost allocation tags in AWS Billing:
 
 Use this when a release causes operational issues.
 
-1. Disable the production schedule temporarily
+1. Disable the **production workflow schedule** temporarily
 2. Revert the last known bad change
 3. Redeploy the previous stable version
 4. Validate:

@@ -44,8 +44,8 @@ tags:
   Application: "avature-ats-etl"
 
 scraper_runtime:
-  concurrent_requests: 8
-  concurrent_requests_per_domain: 4
+  concurrent_requests: 32
+  concurrent_requests_per_domain: 2
   download_delay: 1.0
   download_timeout: 30
 
@@ -53,8 +53,8 @@ scraper_runtime:
   autothrottle_enabled: true
   autothrottle_start_delay: 1.0
   autothrottle_max_delay: 20.0
-  autothrottle_target_concurrency: 1.0
-  retry_times: 4
+  autothrottle_target_concurrency: 2.0
+  retry_times: 3
 
   # Extra verbose logging for dev
   log_level: "DEBUG"

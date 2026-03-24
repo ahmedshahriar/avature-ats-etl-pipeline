@@ -44,7 +44,7 @@ class AvatureEtlBaseStack(Stack):
         ddb_table_suffix: str,
         **kwargs,
     ) -> None:
-        super().__init__(scope, construct_id, **kwargs)
+        super().__init__(scope, construct_id, description=f"Avature ETL Base Stack [{stage}]", **kwargs)
 
         stage = (stage or "dev").lower()
         is_prod = stage == "prod"

@@ -5,7 +5,7 @@ from constructs import Construct
 
 class AvatureEtlEcrStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, *, prefix: str, stage: str, **kwargs) -> None:
-        super().__init__(scope, construct_id, **kwargs)
+        super().__init__(scope, construct_id, description="Avature ETL ECR Stack", **kwargs)
 
         stage = (stage or "dev").lower()
         is_prod = stage == "prod"
