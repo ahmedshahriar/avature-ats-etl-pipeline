@@ -1,10 +1,9 @@
 from pathlib import Path
 
-from aws_cdk import CfnOutput, Duration, Stack, TimeZone
+from aws_cdk import Aws, CfnOutput, Duration, Stack, TimeZone
 from aws_cdk import aws_cloudwatch as cloudwatch
 from aws_cdk import aws_cloudwatch_actions as cloudwatch_actions
-from aws_cdk import aws_ec2 as ec2
-from aws_cdk import aws_ecs as ecs
+from aws_cdk import aws_iam as iam
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_scheduler as scheduler
 from aws_cdk import aws_scheduler_targets as scheduler_targets
@@ -35,7 +34,10 @@ class AvatureEtlWorkflowStack(Stack):
         prefix: str,
         stage: str,
         ecs_cluster,
-        ecs_task_definition,
+        ecs_task_family: str,
+        ecs_container_name: str,
+        ecs_task_execution_role_arn: str,
+        ecs_task_role_arn: str,
         ecs_task_security_group,
         analytics_database_name: str,
         athena_workgroup_name: str,
@@ -77,59 +79,73 @@ class AvatureEtlWorkflowStack(Stack):
             retention=logs.RetentionDays.ONE_MONTH,
         )
 
-        container_definition = ecs_task_definition.default_container
-        if container_definition is None:
-            raise ValueError("ecs_task_definition.default_container must be set for ECS overrides")
+        public_subnet_ids = [subnet.subnet_id for subnet in ecs_cluster.vpc.public_subnets]
+        # Use Step Functions ECS integration via CustomState so the workflow stack does not
+        # import the ECS TaskDefinition construct cross-stack. Passing the stable task family
+        # lets ECS resolve the latest ACTIVE revision at runtime.
+        ecs_run_task_common_parameters = {
+            "Cluster": ecs_cluster.cluster_arn,
+            "LaunchType": "FARGATE",
+            "TaskDefinition": ecs_task_family,
+            "PlatformVersion": "LATEST",
+            "EnableECSManagedTags": True,
+            "PropagateTags": "TASK_DEFINITION",
+            "NetworkConfiguration": {
+                "AwsvpcConfiguration": {
+                    "Subnets": public_subnet_ids,
+                    "SecurityGroups": [ecs_task_security_group.security_group_id],
+                    "AssignPublicIp": "ENABLED",
+                }
+            },
+        }
 
-        run_scraper_default = tasks.EcsRunTask(
+        run_scraper_default = sfn.CustomState(
             self,
             "RunScraperTask",
-            cluster=ecs_cluster,
-            task_definition=ecs_task_definition,
-            integration_pattern=sfn.IntegrationPattern.RUN_JOB,
-            launch_target=tasks.EcsFargateLaunchTarget(platform_version=ecs.FargatePlatformVersion.LATEST),
-            assign_public_ip=True,
-            subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
-            security_groups=[ecs_task_security_group],
-            propagated_tag_source=ecs.PropagatedTagSource.TASK_DEFINITION,
-            task_timeout=sfn.Timeout.duration(Duration.minutes(ecs_task_timeout_minutes)),
-            result_path="$.ecs",
+            state_json={
+                "Type": "Task",
+                "Resource": "arn:aws:states:::ecs:runTask.sync",
+                "Parameters": ecs_run_task_common_parameters,
+                "TimeoutSeconds": ecs_task_timeout_minutes * 60,
+                "ResultPath": "$.ecs",
+            },
         )
+
         # manual override run
         # start the workflow with:
         # {
         #   "run_date_override": "2026-03-20",
         #   "run_id_override": "20260320T120000Z"
         # }
-
-        run_scraper_with_manual_overrides = tasks.EcsRunTask(
+        run_scraper_with_manual_overrides = sfn.CustomState(
             self,
             "RunScraperTaskWithManualOverrides",
-            cluster=ecs_cluster,
-            task_definition=ecs_task_definition,
-            integration_pattern=sfn.IntegrationPattern.RUN_JOB,
-            launch_target=tasks.EcsFargateLaunchTarget(platform_version=ecs.FargatePlatformVersion.LATEST),
-            assign_public_ip=True,
-            subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
-            security_groups=[ecs_task_security_group],
-            propagated_tag_source=ecs.PropagatedTagSource.TASK_DEFINITION,
-            task_timeout=sfn.Timeout.duration(Duration.minutes(ecs_task_timeout_minutes)),
-            container_overrides=[
-                tasks.ContainerOverride(
-                    container_definition=container_definition,
-                    environment=[
-                        tasks.TaskEnvironmentVariable(
-                            name="RUN_DATE",
-                            value=sfn.JsonPath.string_at("$.run_date_override"),
-                        ),
-                        tasks.TaskEnvironmentVariable(
-                            name="RUN_ID",
-                            value=sfn.JsonPath.string_at("$.run_id_override"),
-                        ),
-                    ],
-                )
-            ],
-            result_path="$.ecs",
+            state_json={
+                "Type": "Task",
+                "Resource": "arn:aws:states:::ecs:runTask.sync",
+                "Parameters": {
+                    **ecs_run_task_common_parameters,
+                    "Overrides": {
+                        "ContainerOverrides": [
+                            {
+                                "Name": ecs_container_name,
+                                "Environment": [
+                                    {
+                                        "Name": "RUN_DATE",
+                                        "Value.$": "$.run_date_override",
+                                    },
+                                    {
+                                        "Name": "RUN_ID",
+                                        "Value.$": "$.run_id_override",
+                                    },
+                                ],
+                            }
+                        ]
+                    },
+                },
+                "TimeoutSeconds": ecs_task_timeout_minutes * 60,
+                "ResultPath": "$.ecs",
+            },
         )
 
         # run_scraper_default.add_retry(
@@ -321,6 +337,38 @@ class AvatureEtlWorkflowStack(Stack):
                 level=sfn.LogLevel.ALL,
                 include_execution_data=True,
             ),
+        )
+
+        task_definition_arn_pattern = (
+            f"arn:{Aws.PARTITION}:ecs:{Aws.REGION}:{Aws.ACCOUNT_ID}:task-definition/{ecs_task_family}:*"
+        )
+        stepfunctions_ecs_events_rule_arn = (
+            f"arn:{Aws.PARTITION}:events:{Aws.REGION}:{Aws.ACCOUNT_ID}:rule/StepFunctionsGetEventsForECSTaskRule"
+        )
+
+        state_machine.role.grant_principal.add_to_principal_policy(
+            iam.PolicyStatement(
+                actions=["ecs:RunTask"],
+                resources=[task_definition_arn_pattern],
+            )
+        )
+        state_machine.role.grant_principal.add_to_principal_policy(
+            iam.PolicyStatement(
+                actions=["ecs:StopTask", "ecs:DescribeTasks"],
+                resources=["*"],
+            )
+        )
+        state_machine.role.grant_principal.add_to_principal_policy(
+            iam.PolicyStatement(
+                actions=["events:PutTargets", "events:PutRule", "events:DescribeRule"],
+                resources=[stepfunctions_ecs_events_rule_arn],
+            )
+        )
+        state_machine.role.grant_principal.add_to_principal_policy(
+            iam.PolicyStatement(
+                actions=["iam:PassRole"],
+                resources=[ecs_task_execution_role_arn, ecs_task_role_arn],
+            )
         )
 
         notification_topic = None
