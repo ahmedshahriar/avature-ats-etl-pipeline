@@ -13,11 +13,72 @@ Engineered for reliable cloud execution, this project features:
 - **Scalable data lake storage** writing bronze artifacts and run metadata to S3
 - **Cross-run idempotency & deduplication** powered by DynamoDB
 - **Data quality controls** with validation, warnings, and quarantine for invalid records
-- **Curated analytics layer** using Athena + Glue with bronze / silver / gold modeling
-- **Operational observability** with CloudWatch logs, EMF metrics, alarms, and SNS alerts
+- **Curated analytics layer** using Athena and Glue with bronze / silver / gold modeling
+- **Operational observability** with CloudWatch logs, Embedded Metric Format (EMF) metrics, alarms, and SNS alerts
 - **Fault tolerance** using SQS Dead Letter Queue (DLQ) for failed invocations
 - **Cost guardrails** with Athena scan limits and AWS Budget alerts
 - **Automated CI/CD** using GitHub Actions with AWS OIDC and AWS ECR
+
+## Estimated AWS cost
+
+> Reference scenario: **us-east-1**, current `prod` configuration, **1 scheduled workflow run per day**, **1 ECS Fargate ARM64 task per run**, **1 vCPU / 2 GiB RAM**, **~2 hours per run**, analytics enabled, dashboard enabled, Container Insights disabled, and daily Athena silver promotion only.
+
+| Function                        | AWS service | Scenario / config anchor | Estimated monthly cost |
+|---------------------------------| --- | --- |:----------------------:|
+| Batch scraper compute           | ECS Fargate (Linux/ARM64) | `1024 CPU`, `2048 MiB`, `ARM64`, ~2 hours/day, 30 days |       **~$2.37**       |
+| Public task networking          | Public IPv4 address | `assign_public_ip=True` for the Fargate task, ~2 hours/day |       **~$0.30**       |
+| Daily workflow orchestration    | Step Functions Standard | ~10–20 state transitions per run, 30 runs/month |       **~$0.01**       |
+| Daily trigger                   | EventBridge Scheduler | 30 scheduled invocations/month |       **~$0.00**       |
+| Daily silver promotion          | Athena | workgroup scan cutoff = `512 MB/query`; worst-case one daily query at that cap |      **≤ ~$0.08**      |
+| Metadata catalog                | AWS Glue Data Catalog | 1 small database + a few tables / named queries |       **~$0.00**       |
+| Bronze and ops artifact storage | Amazon S3 Standard | assume ~10 MB of new objects per run, plus low request volume |       **~$0.01**       |
+| Cross-run dedupe                | DynamoDB on-demand | assume ~5,000 new unique jobs/day, 1 write per job, plus small PITR/storage overhead |    **~$0.10–$0.15**    |
+| Runtime and workflow logs       | CloudWatch Logs | `INFO` logging, 30-day retention, light batch log volume |    **~$0.15–$0.20**    |
+| Low-cardinality metrics         | CloudWatch custom metrics | assume 7 custom metric series, 1 `[Project, Stage, Spider]` combination, emitted ~2 hours/day |       **~$0.18**       |
+| Ops dashboard                   | CloudWatch Dashboard | 1 custom dashboard |       **$3.00**        |
+| Operational alarms              | CloudWatch Alarms | 7 standard-resolution alarms (3 runtime + 3 workflow + 1 scheduler DLQ) |       **~$0.70**       |
+| Alerting / DLQ                  | SNS + SQS | low alert traffic; no email subscription configured in current `prod` config |       **~$0.00**       |
+| Budget guardrail                | AWS Budgets | budget notifications only |       **$0.00**        |
+| Container image registry        | Amazon ECR | assume ~1–2 GB of retained private image storage; same-region ECS/Fargate pulls are free |    **~$0.10–$0.20**    |
+
+**Expected monthly envelope:** roughly **$6–$7/month** under this scenario.
+
+### What drives the bill most
+
+<details>
+<summary>See the main cost drivers</summary>
+
+1. **CloudWatch dashboard and alarms**
+2. **Fargate runtime**
+3. **CloudWatch logs**
+4. **Any extra custom metric series beyond the base low-cardinality set**
+
+At this scale, **Step Functions, EventBridge Scheduler, Athena daily promotion, S3 requests, SNS, and SQS are comparatively tiny**.
+</details>
+
+### What keeps cost low
+
+<details>
+<summary>See the main cost-control choices</summary>
+
+- **ARM64 Fargate**
+- **once-daily scheduling**
+- **Container Insights disabled**
+- **Athena bytes-scanned cutoff**
+- **low-cardinality EMF**
+- **1-month CloudWatch log retention**
+- **S3 lifecycle rules for ops/quarantine artifacts**
+
+> Notes:
+> - The custom metric estimate assumes exactly **one** `[Project, Stage, Spider]` dimension combination. Additional unique combinations increase cost linearly.
+> - CloudWatch custom metrics are **prorated by hour**, so a short daily batch workload is much cheaper than 24×7 publishing.
+> - The S3 estimate reflects **new monthly data only**. Historical storage will continue to grow over time because `avature/bronze/jobs/` does not currently have an expiration rule.
+> - The CloudWatch Logs estimate assumes the configured **30-day retention policy** and moderate `INFO`-level log volume.
+> - The DynamoDB estimate assumes **~5,000 new unique jobs/day**. Higher unique job volume scales linearly.
+> - No Secrets Manager line item is included because it is not part of the shared stack files.
+> - Same-region pulls from **ECR → ECS/Fargate** are free, but local developer pulls to the internet are billed separately.
+
+</details>
 
 ---
 
@@ -52,7 +113,7 @@ From each Avature job detail page, the spider extracts the core job record plus 
 - `input_seed_url` — the listing URL from `seed_urls.csv` that led to the crawl
 - `run_id` — unique execution identifier
 - `scraped_at` — UTC timestamp when the item was produced
-- `job_hash` — stable unique job key derived from portal identity and job identity
+- `job_hash` — stable unique job key derived from portal identity (`portal_key`) and `job_id` when available
 
 ### Validation fields
 
@@ -545,6 +606,15 @@ For Athena bootstrap, manual workflow runs, alert handling, and rollback basics,
 
 ## Screenshots
 
+### Step Functions workflow
+
+<details>
+<summary>Shows a successful end-to-end workflow execution: ECS scrape → Athena silver promotion → completion</summary>
+
+<img width="3490" height="1494" alt="stepfunctions_graph_Avature-ATS-ETL" src="https://github.com/user-attachments/assets/a7b54e67-7346-46e8-8859-1039413c395b" />
+
+</details>
+
 ### S3 output
 
 #### S3 job export
@@ -552,7 +622,7 @@ For Athena bootstrap, manual workflow runs, alert handling, and rollback basics,
 <details>
 <summary>Shows Hive-partitioned outputs generated by the ECS task</summary>
 
-![S3 Output](assets/s3-lake-jobs.png)
+<img width="1121" height="344" alt="s3-lake-jobs" src="https://github.com/user-attachments/assets/a699c21d-3049-4a0a-bb16-006c496bb70a" />
 
 </details>
 
@@ -561,7 +631,7 @@ For Athena bootstrap, manual workflow runs, alert handling, and rollback basics,
 <details>
 <summary>Shows run-level artifacts such as metrics and run manifest</summary>
 
-![S3 Ops Artifacts](assets/s3-lake-ops.png)
+<img width="1119" height="389" alt="s3-lake-ops" src="https://github.com/user-attachments/assets/28478b9b-6a17-4a54-8816-4caf781aa73e" />
 
 </details>
 
@@ -569,7 +639,7 @@ For Athena bootstrap, manual workflow runs, alert handling, and rollback basics,
 <details>
 <summary>Shows portal summary artifacts with portal-level breakdowns and completeness metrics</summary>
 
-![S3 Portal Summary](assets/s3-lake-portal-summaries.png)
+<img width="1066" height="305" alt="s3-lake-portal-summaries" src="https://github.com/user-attachments/assets/3aeb613a-99b3-4bb7-b3f0-30081aa80a84" />
 
 </details>
 
@@ -578,7 +648,7 @@ For Athena bootstrap, manual workflow runs, alert handling, and rollback basics,
 <details>
 <summary>Shows quarantined records that failed validation checks</summary>
 
-![S3 Quarantine](assets/s3-lake-quarantine.png)
+<img width="1120" height="342" alt="s3-lake-quarantine" src="https://github.com/user-attachments/assets/a6ef9446-383f-4a60-ad02-f30a2fa6af54" />
 
 </details>
 
@@ -587,24 +657,38 @@ For Athena bootstrap, manual workflow runs, alert handling, and rollback basics,
 <details>
 <summary>Shows stored <code>job_hash</code> keys preventing future duplicates</summary>
 
-![DynamoDB Dedupe](assets/dynamoDB-dedupe.png)
+<img width="570" height="386" alt="dynamoDB-dedupe" src="https://github.com/user-attachments/assets/aa97dcc3-06dd-435e-9a38-1b67eef54cdf" />
 
 </details>
 
-### CloudWatch logs and metrics
+### CloudWatch
+
+#### CloudWatch Dashboard
+
+<details>
+<summary>Cloudwatch dashboard to visualize EMF</summary>
+
+<img width="1501" height="481" alt="cloudwatch-dashboard" src="https://github.com/user-attachments/assets/159b4e77-b427-4b41-9b16-8837561d4d50" />
+
+</details>
+
+#### CloudWatch logs and metrics
 
 <details>
 <summary>Shows structured logs and emitted metrics from the ECS task</summary>
-
-![CloudWatch Logs](assets/cloudwatch-logs.png)
-
+  <img width="1033" height="639" alt="cloudwatch-logs" src="https://github.com/user-attachments/assets/ed9b6b52-e7aa-4fe5-a671-69184177643e" />
 </details>
 
 #### CloudWatch Alarms
 
 <details>
 <summary>Shows example alarms for failed scheduler invocations and runtime errors</summary>
+  <img width="1354" height="663" alt="cloudwatch-alarms" src="https://github.com/user-attachments/assets/01d91668-abcf-49c1-8aef-fac77f516927" />
+</details>
 
-![CloudWatch Alarms](assets/cloudwatch-alarms.png)
+### Athena Analytics
 
+<details>
+<summary>Job portal summary query execution</summary>
+  <img width="1475" height="675" alt="athena-portal-summary" src="https://github.com/user-attachments/assets/31a715e4-93bb-4764-8a8c-1c38a125f133" />
 </details>
