@@ -73,10 +73,9 @@ cost_guardrails_stack = AvatureEtlCostGuardrailsStack(
     env=aws_env,
 )
 
-# ECS + Scheduler are merged into one stack to eliminate Fn::ImportValue cross-stack locks.
-# CDK auto-generates ExportsOutput/Fn::ImportValue for any cross-stack Python reference,
-# which blocks CloudFormation from updating resources like TaskDefinition while another
-# stack imports them. Merging eliminates that constraint entirely.
+# ECS + Scheduler are merged into one stack to avoid task-definition cross-stack export locks.
+# The workflow stack consumes stable identifiers (task family/container name) instead of the
+# TaskDefinition construct, so TaskDefinition revision updates do not block deploys.
 ecs_stack = AvatureEtlEcsScheduleStack(
     app,
     f"{cfg.project_name}-ecs-{cfg.env_name}",
@@ -98,7 +97,7 @@ ecs_stack = AvatureEtlEcsScheduleStack(
     schedule_minute=cfg.schedule_minute,
     schedule_timezone=cfg.schedule_timezone,
     schedule_enabled=ecs_schedule_enabled,
-    notification_topic_arn=notifications_stack.topic.topic_arn if "notifications_stack" in locals() else None,
+    notification_topic_arn=notifications_stack.topic.topic_arn,
     env=aws_env,
 )
 
@@ -148,7 +147,10 @@ if cfg.workflow_enabled and analytics_stack is not None:
         prefix=cfg.project_name,
         stage=cfg.env_name,
         ecs_cluster=ecs_stack.cluster,
-        ecs_task_definition=ecs_stack.task_definition,
+        ecs_task_family=f"{cfg.project_name}-{cfg.env_name}-task",
+        ecs_container_name=f"{cfg.project_name}-{cfg.env_name}-scraper",
+        ecs_task_execution_role_arn=ecs_stack.execution_role.role_arn,
+        ecs_task_role_arn=ecs_stack.task_role.role_arn,
         ecs_task_security_group=ecs_stack.task_security_group,
         analytics_database_name=analytics_stack.database_name,
         athena_workgroup_name=analytics_stack.workgroup_name,
