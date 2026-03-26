@@ -219,6 +219,10 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# Local operator data / scratch files
+data/*
+!data/smoke_seed_urls.csv
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
@@ -227,6 +231,5 @@ __marimo__/
 # local directory
 analysis
 backups
-data
 output
 scripts

@@ -7,14 +7,15 @@ __pycache__
 .Python
 *.egg-info
 .eggs
-dist
-build
 .env
 .env.*
 *.log
 .DS_Store
 .idea
 .vscode
+
+dist
+build
 
 infra
 analysis
@@ -29,3 +30,6 @@ jobstate
 scripts
 output
 .pre-commit-config.yaml
+tests
+docs
+core/tools
