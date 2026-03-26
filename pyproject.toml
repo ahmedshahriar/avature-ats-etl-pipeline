@@ -1,7 +1,7 @@
 [project]
 name = "avature-ats-etl-pipeline"
 version = "0.1.0"
-description = "Scrapy ETL pipeliene with AWS CDK infrastructure for scraping Avature ATS job postings."
+description = "Scrapy ETL pipeline with AWS CDK infrastructure for scraping Avature ATS job postings."
 authors = [
     { name = "Ahmed Shahriar Sakib", email = "assakib@uwaterloo.ca" }
 ]
@@ -64,5 +64,5 @@ include = ["infra", "core"]
 possibly-unresolved-reference = "warn"
 
 [tool.pytest.ini_options]
-testpaths = ["infra/tests"]
-pythonpath = ["infra"]
+testpaths = ["tests", "infra/tests"]
+pythonpath = [".", "infra"]

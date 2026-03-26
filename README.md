@@ -4,7 +4,7 @@
 
 <p align="center"><img align="absmiddle" alt="Python 3.13" src="https://img.shields.io/badge/Python-3.13-blue?logo=python&logoColor=white"> <a href="https://scrapy.org/"><img align="absmiddle" alt="Scrapy" src="https://img.shields.io/badge/Crawler-Scrapy-60A839?logo=scrapy&logoColor=white"></a> <a href="https://aws.amazon.com/cdk/"><img align="absmiddle" alt="AWS CDK" src="https://img.shields.io/badge/IaC-AWS%20CDK-FF9900?logo=amazonaws&logoColor=white"></a></p>
 
-A Scrapy-based end-to-end ETL pipeline for crawling Avature career portals (job listings → job details) and exporting job listings.
+A Scrapy-based end-to-end ETL pipeline for crawling Avature career portals (job listings → job details) and exporting normalized job records.
 
 Engineered for reliable cloud execution, this project features:
 
@@ -13,7 +13,8 @@ Engineered for reliable cloud execution, this project features:
 - **Scalable data lake storage** writing bronze artifacts and run metadata to S3
 - **Cross-run idempotency & deduplication** powered by DynamoDB
 - **Data quality controls** with validation, warnings, and quarantine for invalid records
-- **Curated analytics layer** using Athena and Glue with bronze / silver / gold modeling
+- **Curated analytics layer** using Athena and Glue with bronze / silver / gold modeling plus historical job snapshots
+- **Reliability tooling** with offline scraper regression tests, seed health auditing, and a local smoke crawl command
 - **Operational observability** with CloudWatch logs, Embedded Metric Format (EMF) metrics, alarms, and SNS alerts
 - **Fault tolerance** using SQS Dead Letter Queue (DLQ) for failed invocations
 - **Cost guardrails** with Athena scan limits and AWS Budget alerts
@@ -21,7 +22,7 @@ Engineered for reliable cloud execution, this project features:
 
 ## Estimated AWS cost
 
-> Reference scenario: **us-east-1**, current `prod` configuration, **1 scheduled workflow run per day**, **1 ECS Fargate ARM64 task per run**, **1 vCPU / 2 GiB RAM**, **~2 hours per run**, analytics enabled, dashboard enabled, Container Insights disabled, and daily Athena silver promotion only.
+> Reference scenario: **us-east-1**, current `prod` configuration, **1 scheduled workflow run per day**, **1 ECS Fargate ARM64 task per run**, **1 vCPU / 2 GiB RAM**, **~2 hours per run**, analytics enabled, dashboard enabled, Container Insights disabled, and daily Athena silver + history snapshot promotion.
 
 | Function                        | AWS service | Scenario / config anchor | Estimated monthly cost |
 |---------------------------------| --- | --- |:----------------------:|
@@ -29,7 +30,7 @@ Engineered for reliable cloud execution, this project features:
 | Public task networking          | Public IPv4 address | `assign_public_ip=True` for the Fargate task, ~2 hours/day |       **~$0.30**       |
 | Daily workflow orchestration    | Step Functions Standard | ~10–20 state transitions per run, 30 runs/month |       **~$0.01**       |
 | Daily trigger                   | EventBridge Scheduler | 30 scheduled invocations/month |       **~$0.00**       |
-| Daily silver promotion          | Athena | workgroup scan cutoff = `512 MB/query`; worst-case one daily query at that cap |      **≤ ~$0.08**      |
+| Daily silver + history promotion | Athena | workgroup scan cutoff = `512 MB/query`; worst-case two daily queries at that cap |      **≤ ~$0.15**      |
 | Metadata catalog                | AWS Glue Data Catalog | 1 small database + a few tables / named queries |       **~$0.00**       |
 | Bronze and ops artifact storage | Amazon S3 Standard | assume ~10 MB of new objects per run, plus low request volume |       **~$0.01**       |
 | Cross-run dedupe                | DynamoDB on-demand | assume ~5,000 new unique jobs/day, 1 write per job, plus small PITR/storage overhead |    **~$0.10–$0.15**    |
@@ -110,7 +111,7 @@ From each Avature job detail page, the spider extracts the core job record plus 
 - `canonical_source_url` — normalized detail URL used for stable identity
 - `raw_source_url` — raw URL returned by the site before canonicalization
 - `portal_key` — stable portal identifier such as `ally.avature.net/careers`
-- `input_seed_url` — the listing URL from `seed_urls.csv` that led to the crawl
+- `input_seed_url` — the listing URL from [`seed_urls.csv`](seed_urls.csv) that led to the crawl
 - `run_id` — unique execution identifier
 - `scraped_at` — UTC timestamp when the item was produced
 - `job_hash` — stable unique job key derived from portal identity (`portal_key`) and `job_id` when available
@@ -237,6 +238,8 @@ Scraper-side ownership is intentionally split as follows:
 .
 ├── scrapy.cfg
 ├── seed_urls.csv          # REQUIRED: List of Avature portal URLs to scrape
+├── data/
+│   └── smoke_seed_urls.csv # Curated low-volume portals for the local smoke command
 ├── requirements.txt
 ├── pyproject.toml          # Project config, dependencies (uv), and QA (ruff, ty, pre-commit)
 ├── Dockerfile
@@ -244,7 +247,11 @@ Scraper-side ownership is intentionally split as follows:
 │   ├── items.py
 │   ├── settings.py
 │   ├── pipelines.py
-│   ├── extensions.py
+│   ├── seed_io.py
+│   ├── tools/
+│   │   ├── seed_audit.py   # Checks seed URLs for accessibility, correct structure, and crawlability before a run
+│   │   └── smoke.py
+│   ├── extensions.py       # Scrapy extension for emitting crawl-level metrics and portal summaries
 │   └── spiders/
 │       └── avature_spider.py
 ├── infra/                  # AWS CDK Infrastructure as Code
@@ -256,6 +263,9 @@ Scraper-side ownership is intentionally split as follows:
 │   ├── tests/              # Unit tests for CDK constructs
 │   ├── app.py              # Main CDK app entry point
 │   └── bootstrap_app.py    # CDK app for GitHub OIDC bootstrap stack
+├── tests/                  # Scraper, pipeline, and CLI unit tests
+│   ├── unit/
+│   └── fixtures/           # Saved HTML fixtures
 └── output/
     └── run_<RUN_ID>/...    # job exports, metrics, and logs for each run
 
@@ -279,13 +289,13 @@ source .venv/bin/activate
 
 ### 2. Install dependencies
 
-For local development, use `uv` and the project metadata in `pyproject.toml`:
+For local development, use `uv` and the project metadata in [`pyproject.toml`](pyproject.toml):
 
 ```bash
-uv sync
+uv sync --group local --group infra --group dev
 ```
 
-This installs the project’s local development dependencies.
+This installs the scraper runtime, infra test dependencies, and QA tooling used by the repository.
 
 If you prefer a plain virtual environment for the scraper runtime only:
 
@@ -297,11 +307,11 @@ pip install -r requirements.txt
 
 ### 3. Configure target URLs
 
-The spider reads listing page URLs from a root-level `seed_urls.csv` (a sample file is included in the repository).
+The spider reads listing page URLs from a root-level [`seed_urls.csv`](seed_urls.csv) (a sample file is included in the repository).
 
-Add the target Avature career portal listing URLs (one per line) to `seed_urls.csv`. The spider derives its allowed domains from the URLs in this file.
+Add the target Avature career portal listing URLs to the required `url` column in [`seed_urls.csv`](seed_urls.csv). The spider derives its allowed domains from the URLs in this file.
 
-Example (One URL per line):
+Example:
 
 ```csv
 url
@@ -336,7 +346,7 @@ SCRAPY_FEED_NAME=jobs.jsonl
 SCRAPY_FEED_OVERWRITE=1
 ```
 
-See `.env.example` for the full list of supported runtime settings.
+See [`.env.example`](.env.example) for the full list of supported runtime settings.
 
 ### 5. Run the spider
 
@@ -359,6 +369,34 @@ A healthy run usually shows:
 - `portal_summary.jsonl` with one row per scraped portal
 - `quarantine.jsonl` either empty or containing only invalid records that failed hard validation
 
+### 7. Run QA and reliability tooling
+
+Run the full test and code-quality suite:
+
+```bash
+pytest -q
+ruff check .
+ty check
+```
+
+`pytest -q` includes the infra test suite under [`infra/tests`](infra/tests), so you should have Node.js available on `PATH` for CDK/jsii.
+
+Audit a seed file before a crawl:
+
+```bash
+uv run python -m core.tools.seed_audit seed_urls.csv
+```
+
+This writes a machine-readable report and a recommended seed CSV under `output/seed_audit/<timestamp>/`.
+
+Run a small live smoke crawl against the curated low-volume portals in [`data/smoke_seed_urls.csv`](data/smoke_seed_urls.csv):
+
+```bash
+uv run python -m core.tools.smoke
+```
+
+The smoke command writes to `output/smoke_<timestamp>/` and fails if the crawl does not finish, exports zero jobs, or misses the configured quality thresholds.
+
 ---
 
 ## Running with Docker
@@ -371,7 +409,7 @@ Build locally:
 docker build -t avature-etl:local .
 ```
 
-Run with explicit local mounts (`seed_urls.csv`, `.env`, and `output/`):
+Run with explicit local mounts ([`seed_urls.csv`](seed_urls.csv), `.env`, and `output/`):
 
 ```bash
 docker run --rm \
@@ -391,192 +429,28 @@ Infrastructure is provisioned with **AWS CDK** from the `infra/` directory and o
 - **ECR stack** — shared Amazon ECR repository with immutable tags and image scanning
 - **Base stack** — S3 output bucket, DynamoDB dedupe table, and CloudWatch log group
 - **ECS stack** — ARM64 ECS Fargate task definition and runtime for the scraper
-- **Workflow stack** — EventBridge Scheduler, Step Functions orchestration for daily runs and manual overrides
+- **Workflow stack** — EventBridge Scheduler, Step Functions orchestration for daily runs, manual overrides, silver promotion, and history snapshot promotion
 - **Notifications stack** — SNS topic for operational alerts
 - **Runtime alarm stack** — CloudWatch alarms for scraper and workflow health
-- **Analytics stack** — Glue database, Athena workgroup, and named queries for bronze / silver / gold analytics
+- **Analytics stack** — Glue database, Athena workgroup, and named queries for bronze / silver / gold analytics plus history/change views
 - **Cost guardrails stack** — AWS Budget alerting for spend visibility
 
 ### Environment-specific configuration
 
-Environment-specific settings are defined in:
+Environment-specific settings live in:
 
-- `infra/environments/dev.yaml`
-- `infra/environments/prod.yaml`
+- [`infra/environments/dev.yaml`](infra/environments/dev.yaml)
+- [`infra/environments/prod.yaml`](infra/environments/prod.yaml)
 
-These files control settings such as:
+These files control ECS sizing, workflow behavior, alert routing, Athena guardrails, budget settings, and scraper runtime parameters.
 
-- ECS task sizing
-- schedule ownership via `schedule_target`
-- alert routing
-- Athena scan guardrails
-- monthly budget alerting
-- workflow / ECS timeout behavior
-- scraper runtime parameters
+For full deployment instructions, including manual AWS deployment and GitHub Actions CI/CD setup, see:
 
-At deploy time, these values are injected into the ECS task and supporting AWS resources.
+- [`docs/deployment/aws-deployment.md`](docs/deployment/aws-deployment.md)
 
-### AWS setup
+For post-deployment operational guidance, including Athena bootstrap, manual workflow runs, alert handling, rollback basics, and the daily history snapshot flow, see:
 
-If you want to deploy this project directly from your machine, make sure you have the following available locally:
-
-- an AWS account and credentials with sufficient permissions to deploy CDK stacks and manage ECR, ECS, S3, DynamoDB, and related resources
-- a bootstrapped CDK environment
-- the `infra/` dependencies installed
-- Docker with `buildx` support
-- the AWS CLI configured for the target account/region
-- the AWS CDK CLI installed
-
-Install the infrastructure dependencies:
-
-```bash
-cd infra
-uv sync --only-group infra
-```
-
-Bootstrap the AWS account and region for CDK:
-
-```bash
-cdk bootstrap aws://<ACCOUNT_ID>/<AWS_REGION>
-```
-
-This sets up the CDK toolkit resources required for deployment in the target AWS account and region.
-
-### AWS deployment
-
-This project’s ECS task pulls the scraper image from **Amazon ECR**, so a manual deployment has two parts:
-
-1. build and push the Docker image to ECR
-2. deploy the CDK stacks using that same image tag
-
-A typical manual deployment flow looks like this.
-
-#### Deploy to `dev`
-
-```bash
-cd infra
-uv sync --only-group infra
-
-export AWS_REGION=<your-region>
-export ECR_REPOSITORY=<your-ecr-repository-name>
-export IMAGE_TAG=$(git rev-parse HEAD)
-export PROJECT_NAME=$(uv run python -c "from pathlib import Path; from yaml import safe_load; print(safe_load(Path('environments/dev.yaml').read_text())['project_name'])")
-
-# Ensure the shared ECR stack exists
-cdk deploy "${PROJECT_NAME}-ecr" \
-  --app "uv run python app.py" \
-  --require-approval never \
-  -c env=dev
-
-# Log in to ECR
-export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-aws ecr get-login-password --region "$AWS_REGION" \
-  | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
-
-# Build and push the ARM64 image
-cd ..
-docker buildx build \
-  --platform linux/arm64 \
-  --push \
-  --tag "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG" \
-  .
-
-# Deploy the application stacks using the same image tag
-cd infra
-cdk deploy --app "uv run python app.py" --all \
-  --require-approval never \
-  -c env=dev \
-  -c imageTag="$IMAGE_TAG"
-```
-
-#### Deploy to `prod`
-
-For production, reuse the exact image tag that was already tested in `dev`:
-
-```bash
-cd infra
-uv sync --only-group infra
-
-export AWS_REGION=<your-region>
-export ECR_REPOSITORY=<your-ecr-repository-name>
-export IMAGE_TAG=<existing-dev-image-tag>
-
-# Optional but recommended: verify the tag exists
-aws ecr describe-images \
-  --region "$AWS_REGION" \
-  --repository-name "$ECR_REPOSITORY" \
-  --image-ids imageTag="$IMAGE_TAG" >/dev/null
-
-cdk deploy --app "uv run python app.py" --all \
-  --require-approval never \
-  -c env=prod \
-  -c imageTag="$IMAGE_TAG"
-```
-
-This manual path does **not** require GitHub Actions or GitHub OIDC. Those are only needed for automated deployments from GitHub.
-
-
-### GitHub Actions deployment
-
-For automated deployments, this repository uses **GitHub Actions with AWS OIDC** so that GitHub can assume short-lived AWS roles without storing long-lived AWS access keys.
-
-Before GitHub Actions can deploy, complete this one-time setup:
-
-#### 1. Deploy the GitHub OIDC bootstrap stack
-
-The bootstrap stack creates the GitHub Actions deploy roles for `dev` and `prod`.
-It requires these environment variables:
-
-* `PROJECT_NAME`
-* `GITHUB_OWNER`
-* `GITHUB_REPO`
-* `GITHUB_REPOSITORY_ID`
-* `ECR_REPOSITORY`
-
-Example:
-
-```bash
-cd infra
-
-export PROJECT_NAME=avature-etl
-export GITHUB_OWNER=<your-github-username-or-org>
-export GITHUB_REPO=avature-ats-etl-pipeline
-export GITHUB_REPOSITORY_ID=<your-github-repository-id>
-export ECR_REPOSITORY=<your-ecr-repository-name>
-
-cdk deploy --app "uv run python bootstrap_app.py" --require-approval never
-```
-
-This creates the IAM roles that GitHub Actions will assume for AWS deployments, with permissions scoped to the target ECR repository and CDK deployment actions.
-Copy the created role ARNs for both `dev` and `prod` to use in the next step.
-
-#### 2. Configure GitHub variables and secrets
-
-**Repository variables**
-
-* `AWS_REGION`
-* `ECR_REPOSITORY`
-
-**Environment secrets**
-
-For `dev`:
-
-* `AWS_ROLE_ARN` — the ARN of the GitHub OIDC role created for `dev` in the previous step
-
-For `prod`:
-
-* `AWS_ROLE_ARN` — the ARN of the GitHub OIDC role created for `prod` in the previous step
-* `ALERT_EMAIL` if alerts are enabled
-
-#### 3. Deploy through GitHub Actions
-
-The repository follows a **build once, promote many** workflow:
-
-1. push to `main` builds the image and deploys `dev`
-2. the image is tagged with the full Git commit SHA
-3. production deployment promotes the same tested image tag (triggered via GitHub Actions workflow dispatch)
-
-This keeps deployments immutable and avoids rebuilding different artifacts per environment.
+- [`docs/runbooks/avature-aws-runbook.md`](docs/runbooks/avature-aws-runbook.md)
 
 
 ### Cross-run deduplication via DynamoDB
@@ -594,15 +468,10 @@ Scrapy’s built-in dedupe is run-local only. For AWS runs, this project adds a 
 * In production, the **workflow** owns the schedule (`schedule_target: workflow`).
 * The ECS stack uses the default VPC, so the target AWS account must have one unless the infrastructure is changed.
 * Athena bootstrap queries must be executed once after deploy before the analytics layer is live.
+* The scheduled workflow now runs both the silver incremental insert and the history snapshot incremental insert after each ECS crawl.
 
 > Note: If you build images manually, publish either an `ARM64` image or a multi-arch image that includes `linux/arm64`.
 > By default, ECS/Fargate tasks run on `X86_64` unless `runtimePlatform` is explicitly set.
-
-## Operations docs
-
-For Athena bootstrap, manual workflow runs, alert handling, and rollback basics, see:
-
-- `docs/runbooks/avature-aws-runbook.md`
 
 ## Screenshots
 
@@ -666,7 +535,7 @@ For Athena bootstrap, manual workflow runs, alert handling, and rollback basics,
 #### CloudWatch Dashboard
 
 <details>
-<summary>Cloudwatch dashboard to visualize EMF</summary>
+<summary>CloudWatch dashboard to visualize EMF</summary>
 
 <img width="1501" height="481" alt="cloudwatch-dashboard" src="https://github.com/user-attachments/assets/159b4e77-b427-4b41-9b16-8837561d4d50" />
 

@@ -1,6 +1,5 @@
 """Scrapy spider for crawling Avature career portals."""
 
-import csv
 import hashlib
 import json
 import re
@@ -12,12 +11,13 @@ import scrapy
 from bs4 import BeautifulSoup
 
 from ..items import AvatureJobItem
+from ..seed_io import load_seed_urls, portal_key_from_url
 
 
 class AvatureSpider(scrapy.Spider):
     name = "avature"
 
-    # Normalisation helpers reused from scraper.py
+    # Maps Avature label variants to normalized item fields.
     LABEL_MAP = {
         "job number": "job_id",
         "job id": "job_id",
@@ -71,8 +71,6 @@ class AvatureSpider(scrapy.Spider):
         "workplace arrangement": "remote",
     }
 
-    _EXCLUDED_PATH_SEGMENTS: frozenset[str] = frozenset({"internalcareers", "internalcareer"})
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.allowed_domains: list[str] = []
@@ -88,7 +86,7 @@ class AvatureSpider(scrapy.Spider):
             stats.set_value("crawl/input_seed_file", str(seed_path))
             stats.set_value("crawl/input_file_sha256", self._sha256_file(seed_path))
 
-        seed_urls = self._read_seed_urls(seed_path)
+        seed_urls = load_seed_urls(seed_path)
         if stats:
             stats.set_value("crawl/input_seed_count", len(seed_urls))
 
@@ -328,46 +326,6 @@ class AvatureSpider(scrapy.Spider):
         return project_root / configured
 
     @staticmethod
-    def _is_excluded_url(url: str) -> bool:
-        """Return True if the URL matches a non-production path pattern."""
-        try:
-            parsed = urlparse(url)
-            # Check subdomain prefix
-            host = (parsed.hostname or "").lower()
-            subdomain = host.split(".")[0]
-            if subdomain in AvatureSpider._EXCLUDED_PATH_SEGMENTS:
-                return True
-            # Check each path segment
-            path_parts = {p.lower() for p in parsed.path.split("/") if p}
-            if path_parts & AvatureSpider._EXCLUDED_PATH_SEGMENTS:
-                return True
-        except Exception:
-            pass
-        return False
-
-    @staticmethod
-    def _read_seed_urls(seed_path: Path) -> list[str]:
-        urls: list[str] = []
-        with seed_path.open(newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            url_field = None
-            for row in reader:
-                if url_field is None:
-                    url_field = next(
-                        (k for k in row if k.strip().lower() in {"url", "seed_url"}),
-                        None,
-                    ) or next(iter(row))  # fallback: first column
-                raw = row.get(url_field, "").strip().rstrip(",").strip()
-                if not raw or raw.startswith("#"):
-                    continue
-                if not raw.startswith(("http://", "https://")):
-                    continue
-                if AvatureSpider._is_excluded_url(raw):
-                    continue
-                urls.append(raw)
-        return urls
-
-    @staticmethod
     def _sha256_file(path: Path) -> str:
         h = hashlib.sha256()
         with path.open("rb") as f:
@@ -431,15 +389,7 @@ class AvatureSpider(scrapy.Spider):
 
     @staticmethod
     def _portal_key_from_url(url: str) -> str:
-        parsed = urlparse(url)
-        host = (parsed.hostname or "").lower()
-        parts = [p for p in parsed.path.split("/") if p]
-        if "careers" in parts:
-            idx = parts.index("careers")
-            portal_path = "/".join(parts[: idx + 1])
-        else:
-            portal_path = "/".join(parts[:2]) if len(parts) >= 2 else "/".join(parts[:1])
-        return f"{host}/{portal_path}".rstrip("/")
+        return portal_key_from_url(url)
 
     @staticmethod
     def _iso_now() -> str:

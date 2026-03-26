@@ -3,6 +3,8 @@ Unit tests for infra stacks.
 
 """
 
+import json
+
 import aws_cdk as cdk
 import pytest
 from aws_cdk.assertions import Template
@@ -301,7 +303,7 @@ def test_analytics_stack_resources_created(analytics_stack):
 
     template.resource_count_is("AWS::Glue::Database", 1)
     template.resource_count_is("AWS::Athena::WorkGroup", 1)
-    template.resource_count_is("AWS::Athena::NamedQuery", 5)
+    template.resource_count_is("AWS::Athena::NamedQuery", 9)
 
     template.has_resource_properties(
         "AWS::Glue::Database",
@@ -333,6 +335,10 @@ def test_analytics_stack_resources_created(analytics_stack):
         "avature-etl-dev-03-silver-jobs-curated-ctas",
         "avature-etl-dev-04-silver-jobs-incremental-insert",
         "avature-etl-dev-05-gold-portal-daily-summary",
+        "avature-etl-dev-06-silver-jobs-history-snapshot-ctas",
+        "avature-etl-dev-07-silver-jobs-history-snapshot-incremental-insert",
+        "avature-etl-dev-08-gold-job-change-events",
+        "avature-etl-dev-09-gold-job-lifecycle-summary",
     }
 
     for props in query_props:
@@ -367,6 +373,10 @@ def test_workflow_stack_resources_created(workflow_stack):
             "StateMachineName": "avature-etl-dev-workflow",
         },
     )
+
+    rendered_template = json.dumps(template.to_json())
+    assert "StartHistorySnapshotDefault" in rendered_template
+    assert "StartHistorySnapshotManual" in rendered_template
 
     template.has_resource_properties(
         "AWS::Scheduler::Schedule",

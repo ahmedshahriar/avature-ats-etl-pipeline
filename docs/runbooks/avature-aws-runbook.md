@@ -20,17 +20,23 @@ CDK creates the Glue database, Athena workgroup, and saved Athena queries, but i
 
 Run these saved Athena queries in this order:
 
-1. `01_bronze_jobs_raw`
-2. `02_ops_portal_summary_raw` (optional for ops analytics)
-3. `03_silver_jobs_curated_ctas`
-4. `05_gold_portal_daily_summary`
+1. [`01_bronze_jobs_raw`](../../infra/sql/01_bronze_jobs_raw.sql)
+2. [`02_ops_portal_summary_raw`](../../infra/sql/02_ops_portal_summary_raw.sql) (optional for ops analytics)
+3. [`03_silver_jobs_curated_ctas`](../../infra/sql/03_silver_jobs_curated_ctas.sql)
+4. [`05_gold_portal_daily_summary`](../../infra/sql/05_gold_portal_daily_summary.sql)
+5. [`06_silver_jobs_history_snapshot_ctas`](../../infra/sql/06_silver_jobs_history_snapshot_ctas.sql)
+6. [`08_gold_job_change_events`](../../infra/sql/08_gold_job_change_events.sql)
+7. [`09_gold_job_lifecycle_summary`](../../infra/sql/09_gold_job_lifecycle_summary.sql)
 
 ### Notes
 
-- `03_silver_jobs_curated_ctas` is a **one-time initialization** query that creates `silver_jobs_curated`.
+- [`03_silver_jobs_curated_ctas`](../../infra/sql/03_silver_jobs_curated_ctas.sql) is a **one-time initialization** query that creates `silver_jobs_curated`.
+- [`06_silver_jobs_history_snapshot_ctas`](../../infra/sql/06_silver_jobs_history_snapshot_ctas.sql) is a **one-time initialization** query that creates `silver_jobs_history_snapshot`.
 - The silver CTAS `external_location` must be empty before the first run.
-- Daily operation should use `04_silver_jobs_incremental_insert` through the workflow.
-- `05_gold_portal_daily_summary` creates a **view** on top of silver, so it does not need a separate daily refresh job.
+- The history snapshot CTAS `external_location` must be empty before the first run.
+- Daily operation should use [`04_silver_jobs_incremental_insert`](../../infra/sql/04_silver_jobs_incremental_insert.sql) and [`07_silver_jobs_history_snapshot_incremental_insert`](../../infra/sql/07_silver_jobs_history_snapshot_incremental_insert.sql) through the workflow.
+- [`05_gold_portal_daily_summary`](../../infra/sql/05_gold_portal_daily_summary.sql) creates a **view** on top of silver, so it does not need a separate daily refresh job.
+- [`08_gold_job_change_events`](../../infra/sql/08_gold_job_change_events.sql) and [`09_gold_job_lifecycle_summary`](../../infra/sql/09_gold_job_lifecycle_summary.sql) create **views** on top of the history snapshot table, so they do not need separate daily refresh jobs.
 
 ---
 
@@ -45,7 +51,8 @@ Expected flow:
 1. EventBridge Scheduler starts the Step Functions workflow
 2. Step Functions runs the ECS Fargate scraper task
 3. Step Functions runs the Athena silver incremental insert
-4. Gold remains queryable through Athena
+4. Step Functions runs the Athena history snapshot incremental insert
+5. Gold and history views remain queryable through Athena
 
 ### Daily checks
 
@@ -54,6 +61,7 @@ Confirm:
 - the Step Functions execution succeeded
 - the ECS scraper task completed successfully
 - the Athena silver insert succeeded
+- the Athena history snapshot insert succeeded
 - the workflow scheduler DLQ is empty
 - no relevant CloudWatch alarms are in `ALARM`
 
@@ -69,7 +77,7 @@ Use an empty input object:
 
 ```json
 {}
-````
+```
 
 ### Manual rerun
 
@@ -123,6 +131,7 @@ What to do:
     * ECS scraper task
     * Athena query submission
     * Athena query polling
+    * Athena history snapshot submission / polling
 3. Review the execution error payload
 4. Check ECS logs and Athena query history
 5. Re-run manually or use Step Functions redrive if appropriate
@@ -208,7 +217,24 @@ Check:
 
 Common causes:
 
-* `silver_jobs_curated` was never created because `03_silver_jobs_curated_ctas` was not run yet
+* `silver_jobs_curated` was never created because [`03_silver_jobs_curated_ctas`](../../infra/sql/03_silver_jobs_curated_ctas.sql) was not run yet
+* bootstrap queries were run out of order
+* the expected `run_date` has no valid bronze rows to promote
+* the query hit the Athena bytes-scanned cutoff
+
+### History snapshot insert failed
+
+Check:
+
+* Athena query execution status
+* `silver_jobs_history_snapshot` table exists
+* the expected `run_date` has valid bronze rows to snapshot
+* workgroup result location is valid
+* query did not exceed the bytes-scanned cutoff
+
+Common causes:
+
+* `silver_jobs_history_snapshot` was never created because [`06_silver_jobs_history_snapshot_ctas`](../../infra/sql/06_silver_jobs_history_snapshot_ctas.sql) was not run yet
 * bootstrap queries were run out of order
 * the expected `run_date` has no valid bronze rows to promote
 * the query hit the Athena bytes-scanned cutoff
@@ -219,6 +245,7 @@ Check:
 
 * bootstrap queries were run in order
 * silver CTAS location was empty before first run
+* history snapshot CTAS location was empty before first run
 * Glue database and named queries exist
 
 ---
@@ -255,6 +282,7 @@ Use this when a release causes operational issues.
     * workflow execution
     * ECS task run
     * Athena silver insert
+    * Athena history snapshot insert
     * alarm state
 
 ---

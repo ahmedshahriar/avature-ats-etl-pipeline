@@ -63,10 +63,10 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
-        run: uv sync --frozen --only-group infra
+        run: uv sync --frozen --no-dev --group infra
 
       - name: Run unit tests
-        run: uv run pytest -v --tb=short
+        run: uv run pytest -q --tb=short
 
   synth:
     name: "Synth - CDK synthesis check"
