@@ -19,10 +19,12 @@ class AvatureEtlWorkflowStack(Stack):
     End-to-end workflow:
       1. Run ECS scraper task synchronously
       2. Run Athena silver promotion query (valid bronze rows) via Athena
-      3. Finish
+      3. Run Athena history snapshot promotion query via Athena
+      4. Finish
 
     Notes:
       - silver promotion is SQL-idempotent via anti-join
+      - history snapshot promotion is SQL-idempotent via anti-join
       - gold is currently a VIEW, so it does not need a daily refresh step
     """
 
@@ -68,6 +70,16 @@ class AvatureEtlWorkflowStack(Stack):
 
         silver_insert_manual_sql = self._load_sql_template(
             sql_dir / "04_silver_jobs_incremental_insert.sql",
+            database_name=analytics_database_name,
+            run_date_filter="'{}'",
+        )
+        history_snapshot_insert_default_sql = self._load_sql_template(
+            sql_dir / "07_silver_jobs_history_snapshot_incremental_insert.sql",
+            database_name=analytics_database_name,
+            run_date_filter="CAST(current_date AS varchar)",
+        )
+        history_snapshot_insert_manual_sql = self._load_sql_template(
+            sql_dir / "07_silver_jobs_history_snapshot_incremental_insert.sql",
             database_name=analytics_database_name,
             run_date_filter="'{}'",
         )
@@ -179,11 +191,21 @@ class AvatureEtlWorkflowStack(Stack):
             "AthenaSubmissionFailed",
             cause="Failed to submit Athena silver promotion query.",
         )
+        history_snapshot_submission_failed = sfn.Fail(
+            self,
+            "HistorySnapshotSubmissionFailed",
+            cause="Failed to submit Athena history snapshot promotion query.",
+        )
 
         athena_poll_failed = sfn.Fail(
             self,
             "AthenaPollFailed",
             cause="Failed while polling Athena silver promotion query.",
+        )
+        history_snapshot_poll_failed = sfn.Fail(
+            self,
+            "HistorySnapshotPollFailed",
+            cause="Failed while polling Athena history snapshot promotion query.",
         )
 
         run_scraper_default.add_catch(
@@ -199,6 +221,7 @@ class AvatureEtlWorkflowStack(Stack):
         )
 
         use_manual_ecs_overrides = sfn.Choice(self, "UseManualEcsOverrides?")
+        use_manual_history_snapshot_overrides = sfn.Choice(self, "UseManualHistorySnapshotOverrides?")
 
         both_overrides_present = sfn.Condition.and_(
             sfn.Condition.is_present("$.run_date_override"),
@@ -240,6 +263,29 @@ class AvatureEtlWorkflowStack(Stack):
             ),
             result_path="$.athenaStart",
         )
+        start_history_snapshot_default = tasks.AthenaStartQueryExecution(
+            self,
+            "StartHistorySnapshotDefault",
+            query_string=history_snapshot_insert_default_sql,
+            work_group=athena_workgroup_name,
+            query_execution_context=tasks.QueryExecutionContext(
+                database_name=analytics_database_name,
+            ),
+            result_path="$.historySnapshotStart",
+        )
+        start_history_snapshot_manual = tasks.AthenaStartQueryExecution(
+            self,
+            "StartHistorySnapshotManual",
+            query_string=sfn.JsonPath.format(
+                history_snapshot_insert_manual_sql,
+                sfn.JsonPath.string_at("$.run_date_override"),
+            ),
+            work_group=athena_workgroup_name,
+            query_execution_context=tasks.QueryExecutionContext(
+                database_name=analytics_database_name,
+            ),
+            result_path="$.historySnapshotStart",
+        )
 
         for athena_start in (start_silver_insert_default, start_silver_insert_manual):
             athena_start.add_retry(
@@ -257,21 +303,37 @@ class AvatureEtlWorkflowStack(Stack):
                 errors=["States.ALL"],
                 result_path="$.error",
             )
+        for history_start in (start_history_snapshot_default, start_history_snapshot_manual):
+            history_start.add_retry(
+                errors=[
+                    "Athena.InternalServerException",
+                    "Athena.TooManyRequestsException",
+                    "States.TaskFailed",
+                ],
+                interval=Duration.seconds(20),
+                max_attempts=3,
+                backoff_rate=2.0,
+            )
+            history_start.add_catch(
+                history_snapshot_submission_failed,
+                errors=["States.ALL"],
+                result_path="$.error",
+            )
 
-        wait_for_query = sfn.Wait(
+        wait_for_silver_query = sfn.Wait(
             self,
-            "WaitForAthena",
+            "WaitForSilverAthena",
             time=sfn.WaitTime.duration(Duration.seconds(athena_poll_seconds)),
         )
 
-        get_query = tasks.AthenaGetQueryExecution(
+        get_silver_query = tasks.AthenaGetQueryExecution(
             self,
-            "GetAthenaQueryExecution",
+            "GetSilverAthenaQueryExecution",
             query_execution_id=sfn.JsonPath.string_at("$.athenaStart.QueryExecutionId"),
             result_path="$.athenaQuery",
         )
 
-        get_query.add_retry(
+        get_silver_query.add_retry(
             errors=[
                 "Athena.InternalServerException",
                 "Athena.TooManyRequestsException",
@@ -282,37 +344,83 @@ class AvatureEtlWorkflowStack(Stack):
             backoff_rate=2.0,
         )
 
-        get_query.add_catch(
+        get_silver_query.add_catch(
             athena_poll_failed,
+            errors=["States.ALL"],
+            result_path="$.error",
+        )
+        wait_for_history_snapshot_query = sfn.Wait(
+            self,
+            "WaitForHistorySnapshotAthena",
+            time=sfn.WaitTime.duration(Duration.seconds(athena_poll_seconds)),
+        )
+        get_history_snapshot_query = tasks.AthenaGetQueryExecution(
+            self,
+            "GetHistorySnapshotAthenaQueryExecution",
+            query_execution_id=sfn.JsonPath.string_at("$.historySnapshotStart.QueryExecutionId"),
+            result_path="$.historySnapshotQuery",
+        )
+        get_history_snapshot_query.add_retry(
+            errors=[
+                "Athena.InternalServerException",
+                "Athena.TooManyRequestsException",
+                "States.TaskFailed",
+            ],
+            interval=Duration.seconds(20),
+            max_attempts=6,
+            backoff_rate=2.0,
+        )
+        get_history_snapshot_query.add_catch(
+            history_snapshot_poll_failed,
             errors=["States.ALL"],
             result_path="$.error",
         )
 
         workflow_succeeded = sfn.Succeed(self, "WorkflowSucceeded")
         silver_promotion_failed = sfn.Fail(self, "SilverPromotionFailed")
+        history_snapshot_promotion_failed = sfn.Fail(self, "HistorySnapshotPromotionFailed")
 
-        query_status = sfn.Choice(self, "AthenaQueryFinished?")
-        query_status.when(
+        silver_query_status = sfn.Choice(self, "SilverAthenaQueryFinished?")
+        silver_query_status.when(
             sfn.Condition.string_equals("$.athenaQuery.QueryExecution.Status.State", "SUCCEEDED"),
-            workflow_succeeded,
+            use_manual_history_snapshot_overrides,
         )
-        query_status.when(
+        silver_query_status.when(
             sfn.Condition.or_(
                 sfn.Condition.string_equals("$.athenaQuery.QueryExecution.Status.State", "FAILED"),
                 sfn.Condition.string_equals("$.athenaQuery.QueryExecution.Status.State", "CANCELLED"),
             ),
             silver_promotion_failed,
         )
-        query_status.otherwise(wait_for_query)
+        silver_query_status.otherwise(wait_for_silver_query)
+        history_snapshot_query_status = sfn.Choice(self, "HistorySnapshotAthenaQueryFinished?")
+        history_snapshot_query_status.when(
+            sfn.Condition.string_equals("$.historySnapshotQuery.QueryExecution.Status.State", "SUCCEEDED"),
+            workflow_succeeded,
+        )
+        history_snapshot_query_status.when(
+            sfn.Condition.or_(
+                sfn.Condition.string_equals("$.historySnapshotQuery.QueryExecution.Status.State", "FAILED"),
+                sfn.Condition.string_equals("$.historySnapshotQuery.QueryExecution.Status.State", "CANCELLED"),
+            ),
+            history_snapshot_promotion_failed,
+        )
+        history_snapshot_query_status.otherwise(wait_for_history_snapshot_query)
 
         run_scraper_default.next(start_silver_insert_default)
         run_scraper_with_manual_overrides.next(start_silver_insert_manual)
 
-        start_silver_insert_default.next(wait_for_query)
-        start_silver_insert_manual.next(wait_for_query)
+        start_silver_insert_default.next(wait_for_silver_query)
+        start_silver_insert_manual.next(wait_for_silver_query)
 
-        wait_for_query.next(get_query)
-        get_query.next(query_status)
+        wait_for_silver_query.next(get_silver_query)
+        get_silver_query.next(silver_query_status)
+
+        start_history_snapshot_default.next(wait_for_history_snapshot_query)
+        start_history_snapshot_manual.next(wait_for_history_snapshot_query)
+
+        wait_for_history_snapshot_query.next(get_history_snapshot_query)
+        get_history_snapshot_query.next(history_snapshot_query_status)
 
         use_manual_ecs_overrides.when(
             both_overrides_present,
@@ -323,6 +431,15 @@ class AvatureEtlWorkflowStack(Stack):
             invalid_manual_override_input,
         )
         use_manual_ecs_overrides.otherwise(run_scraper_default)
+        use_manual_history_snapshot_overrides.when(
+            both_overrides_present,
+            start_history_snapshot_manual,
+        )
+        use_manual_history_snapshot_overrides.when(
+            only_one_override_present,
+            invalid_manual_override_input,
+        )
+        use_manual_history_snapshot_overrides.otherwise(start_history_snapshot_default)
 
         definition = use_manual_ecs_overrides
 

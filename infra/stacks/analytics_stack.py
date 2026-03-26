@@ -99,6 +99,26 @@ class AvatureEtlAnalyticsStack(Stack):
                 "05_gold_portal_daily_summary.sql",
                 f"{prefix}-{stage}-05-gold-portal-daily-summary",
             ),
+            (
+                "SilverJobsHistorySnapshotCtas",
+                "06_silver_jobs_history_snapshot_ctas.sql",
+                f"{prefix}-{stage}-06-silver-jobs-history-snapshot-ctas",
+            ),
+            (
+                "SilverJobsHistorySnapshotIncrementalInsert",
+                "07_silver_jobs_history_snapshot_incremental_insert.sql",
+                f"{prefix}-{stage}-07-silver-jobs-history-snapshot-incremental-insert",
+            ),
+            (
+                "GoldJobChangeEvents",
+                "08_gold_job_change_events.sql",
+                f"{prefix}-{stage}-08-gold-job-change-events",
+            ),
+            (
+                "GoldJobLifecycleSummary",
+                "09_gold_job_lifecycle_summary.sql",
+                f"{prefix}-{stage}-09-gold-job-lifecycle-summary",
+            ),
         ]
 
         for construct_id, filename, query_name in queries:
